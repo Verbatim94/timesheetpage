@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="it">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Timesheet PDF Generator</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+
+<body>
+    <div class="container">
+        <div class="card">
+            <h1>Timesheet Generator</h1>
+            <p>Carica il tuo file Excel per generare i report PDF</p>
+
+            <form action="/analyze" method="post" enctype="multipart/form-data" id="uploadForm">
+                <div class="upload-area" id="dropZone">
+                    <input type="file" name="file" accept=".xlsx" class="file-input" id="fileInput" required>
+                    <svg class="upload-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                        xmlns="http://www.w3.org/2000/svg">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12">
+                        </path>
+                    </svg>
+                    <div id="uploadText">
+                        <strong>Clicca per caricare</strong> o trascina il file qui
+                    </div>
+                </div>
+
+                <button type="submit" class="btn">Analizza Excel</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Hacking Overlay -->
+    <div id="hacking-overlay">
+        <div class="terminal-window">
+            <div class="terminal-header">
+                <span>SYSTEM ANALYSIS MODULE v3.0</span>
+                <span>STATUS: ACTIVE</span>
+            </div>
+
+            <div class="log-area" id="logArea">
+                <div class="log-entry">> INITIALIZING SYSTEM...</div>
+            </div>
+
+            <div class="progress-container">
+                <div class="progress-bar" id="progressBar"></div>
+            </div>
+
+            <div style="text-align: right; font-size: 0.8rem;">
+                PROCESSING_NODE: <span class="blink">_</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const uploadText = document.getElementById('uploadText');
+        const uploadForm = document.getElementById('uploadForm');
+        const overlay = document.getElementById('hacking-overlay');
+        const progressBar = document.getElementById('progressBar');
+        const logArea = document.getElementById('logArea');
+
+        // Drag and drop effects
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, highlight, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, unhighlight, false);
+        });
+
+        function highlight(e) {
+            dropZone.classList.add('dragover');
+        }
+
+        function unhighlight(e) {
+            dropZone.classList.remove('dragover');
+        }
+
+        dropZone.addEventListener('drop', handleDrop, false);
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            fileInput.files = files;
+            updateFileName(files[0]);
+        }
+
+        fileInput.addEventListener('change', function () {
+            if (this.files && this.files[0]) {
+                updateFileName(this.files[0]);
+            }
+        });
+
+        function updateFileName(file) {
+            uploadText.innerHTML = `File selezionato: <strong>${file.name}</strong>`;
+        }
+
+        // Hacking Simulation Logic
+        const logs = [
+            "ACCESSING MAINFRAME REPOSITORY...",
+            "BYPASSING SECURITY PROTOCOLS...",
+            "DECRYPTING DATA STREAMS...",
+            "ANALYZING XLS STRUCTURE...",
+            "IDENTIFYING USER PATTERNS...",
+            "CALCULATING WORKSHEET VECTORS...",
+            "OPTIMIZING COST CENTER MATRIX...",
+            "VERIFYING INTEGRITY CHECKSUMS...",
+            "COMPILING REPORT METADATA..."
+        ];
+
+        function addLog(text) {
+            const div = document.createElement('div');
+            div.className = 'log-entry';
+            div.textContent = `> ${text}`;
+            logArea.appendChild(div);
+            logArea.scrollTop = logArea.scrollHeight;
+        }
+
+        uploadForm.addEventListener('submit', function (e) {
+            e.preventDefault();
+
+            const file = fileInput.files[0];
+            if (!file) return;
+
+            // Show overlay
+            overlay.style.display = 'flex';
+
+            // Start FormData upload
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/analyze', true);
+
+            // Upload progress
+            xhr.upload.onprogress = function (e) {
+                if (e.lengthComputable) {
+                    const percentComplete = (e.loaded / e.total) * 40; // Upload is 40% of visual progress
+                    progressBar.style.width = percentComplete + '%';
+                }
+            };
+
+            xhr.onload = function () {
+                if (xhr.status === 200) {
+                    // Upload done, simulate processing
+                    let progress = 40;
+                    let logIndex = 0;
+
+                    const interval = setInterval(() => {
+                        progress += Math.random() * 5;
+                        if (progress > 100) progress = 100;
+                        progressBar.style.width = progress + '%';
+
+                        if (Math.random() > 0.6 && logIndex < logs.length) {
+                            addLog(logs[logIndex++]);
+                        }
+
+                        if (progress === 100) {
+                            clearInterval(interval);
+                            addLog("PROCESS COMPLETE. REDIRECTING...");
+                            setTimeout(() => {
+                                document.open();
+                                document.write(xhr.responseText);
+                                document.close();
+                            }, 500);
+                        }
+                    }, 100);
+                } else {
+                    alert("Errore nell'analisi del file.");
+                    overlay.style.display = 'none';
+                }
+            };
+
+            xhr.onerror = function () {
+                alert("Errore di connessione.");
+                overlay.style.display = 'none';
+            };
+
+            xhr.send(formData);
+        });
+    </script>
+</body>
+
+</html>

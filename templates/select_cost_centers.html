@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="it">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Seleziona Cost Center</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        /* Hacker Console Styles */
+        #console-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #000;
+            /* Pure black for canvas */
+            color: #00ff41;
+            font-family: 'Courier New', Courier, monospace;
+            z-index: 9999;
+            padding: 20px;
+            box-sizing: border-box;
+            flex-direction: column;
+            overflow: hidden;
+            /* Prevent scrollbars from canvas resizing */
+        }
+
+        /* Canvas Background */
+        #spider-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            pointer-events: all;
+            /* Allow mouse interaction */
+        }
+
+        /* Ensure content is above canvas */
+        .console-header,
+        .console-body,
+        .progress-container,
+        #finish-actions {
+            position: relative;
+            z-index: 10;
+        }
+
+        .console-header {
+            border-bottom: 2px solid #00ff41;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+            font-size: 1.2rem;
+            text-transform: uppercase;
+            display: flex;
+            justify-content: space-between;
+            background: rgba(0, 0, 0, 0.5);
+            /* Slight transparency for readability */
+        }
+
+        .console-body {
+            flex-grow: 1;
+            overflow-y: auto;
+            border: 1px solid #333;
+            background: rgba(0, 0, 0, 0.7);
+            /* Transparent bg to see spider */
+            padding: 10px;
+            margin-bottom: 20px;
+            white-space: pre-wrap;
+            font-size: 0.9rem;
+            box-shadow: inset 0 0 10px rgba(0, 255, 65, 0.2);
+        }
+
+        .progress-container {
+            border: 1px solid #00ff41;
+            height: 25px;
+            width: 100%;
+            position: relative;
+            background: rgba(0, 0, 0, 0.7);
+        }
+
+        .progress-bar {
+            background-color: #00ff41;
+            height: 100%;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        .progress-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #000;
+            font-weight: bold;
+            mix-blend-mode: screen;
+        }
+
+        .blink {
+            animation: blinker 1s linear infinite;
+        }
+
+        @keyframes blinker {
+            50% {
+                opacity: 0;
+            }
+        }
+
+        /* Scrollbar */
+        .console-body::-webkit-scrollbar {
+            width: 10px;
+        }
+
+        .console-body::-webkit-scrollbar-track {
+            background: #000;
+        }
+
+        .console-body::-webkit-scrollbar-thumb {
+            background: #00ff41;
+            border-radius: 5px;
+        }
+    </style>
+    <script>
+        function toggleAll(source) {
+            checkboxes = document.getElementsByName('cost_centers');
+            for (var i = 0, n = checkboxes.length; i < n; i++) {
+                checkboxes[i].checked = source.checked;
+            }
+        }
+
+        // --- COSMIC SPIDER JS START ---
+        // requestAnimFrame polyfill
+        window.requestAnimFrame = (function () {
+            return (
+                window.requestAnimationFrame ||
+                window.webkitRequestAnimationFrame ||
+                window.mozRequestAnimationFrame ||
+                window.oRequestAnimationFrame ||
+                window.msRequestAnimationFrame ||
+                function (cb) { window.setTimeout(cb, 1000 / 60); }
+            );
+        })();
+
+        let spiderCtx, spiderCanvas, spiderW, spiderH;
+        let spiderRunning = false;
+
+        function initSpider(elemid) {
+            const canvas = document.getElementById(elemid);
+            const c = canvas.getContext("2d");
+
+            // High DPI support
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = window.innerWidth * dpr;
+            canvas.height = window.innerHeight * dpr;
+            c.scale(dpr, dpr);
+
+            // Set style width/height to match window
+            canvas.style.width = window.innerWidth + 'px';
+            canvas.style.height = window.innerHeight + 'px';
+
+            // Initial fill
+            c.fillStyle = "rgba(0,0,0,1)";
+            c.fillRect(0, 0, window.innerWidth, window.innerHeight);
+
+            return { c, canvas };
+        }
+
+        function startSpider() {
+            if (spiderRunning) return; // Prevent double start
+            spiderRunning = true;
+
+            const { c, canvas } = initSpider("spider-canvas");
+            spiderCtx = c;
+            spiderCanvas = canvas;
+            spiderW = window.innerWidth;
+            spiderH = window.innerHeight;
+
+            const mouse = { x: false, y: false };
+
+            function dist(x1, y1, x2, y2) {
+                const dx = x2 - x1, dy = y2 - y1;
+                return Math.sqrt(dx * dx + dy * dy);
+            }
+
+            class Segment {
+                constructor(parent, l, a, first) {
+                    this.first = first;
+                    this.pos = first
+                        ? { x: parent.x, y: parent.y }
+                        : { x: parent.nextPos.x, y: parent.nextPos.y };
+
+                    this.l = l;
+                    this.ang = a;
+                    this.nextPos = {
+                        x: this.pos.x + this.l * Math.cos(this.ang),
+                        y: this.pos.y + this.l * Math.sin(this.ang),
+                    };
+                }
+
+                update(t) {
+                    this.ang = Math.atan2(t.y - this.pos.y, t.x - this.pos.x);
+                    this.pos.x = t.x + this.l * Math.cos(this.ang - Math.PI);
+                    this.pos.y = t.y + this.l * Math.sin(this.ang - Math.PI);
+                    this.nextPos.x = this.pos.x + this.l * Math.cos(this.ang);
+                    this.nextPos.y = this.pos.y + this.l * Math.sin(this.ang);
+                }
+
+                fallback(t) {
+                    this.pos.x = t.x;
+                    this.pos.y = t.y;
+                    this.nextPos.x = this.pos.x + this.l * Math.cos(this.ang);
+                    this.nextPos.y = this.pos.y + this.l * Math.sin(this.ang);
+                }
+
+                show() {
+                    spiderCtx.lineTo(this.nextPos.x, this.nextPos.y);
+                }
+            }
+
+            class Tentacle {
+                constructor(x, y, l, n) {
+                    this.x = x;
+                    this.y = y;
+                    this.l = l;
+                    this.n = n;
+                    this.t = {};
+                    this.rand = Math.random();
+                    this.segments = [new Segment(this, this.l / this.n, 0, true)];
+                    for (let i = 1; i < this.n; i++) {
+                        this.segments.push(new Segment(this.segments[i - 1], this.l / this.n, 0, false));
+                    }
+                }
+
+                move(last_target, target) {
+                    this.angle = Math.atan2(target.y - this.y, target.x - this.x);
+                    this.dt = dist(last_target.x, last_target.y, target.x, target.y);
+
+                    this.t = {
+                        x: target.x - 0.8 * this.dt * Math.cos(this.angle),
+                        y: target.y - 0.8 * this.dt * Math.sin(this.angle),
+                    };
+
+                    this.segments[this.n - 1].update(this.t.x ? this.t : target);
+
+                    for (let i = this.n - 2; i >= 0; i--) {
+                        this.segments[i].update(this.segments[i + 1].pos);
+                    }
+
+                    if (dist(this.x, this.y, target.x, target.y) <= this.l + this.dt) {
+                        this.segments[0].fallback({ x: this.x, y: this.y });
+                        for (let i = 1; i < this.n; i++) {
+                            this.segments[i].fallback(this.segments[i - 1].nextPos);
+                        }
+                    }
+                }
+
+                show(target) {
+                    if (dist(this.x, this.y, target.x, target.y) <= this.l) {
+                        spiderCtx.globalCompositeOperation = "lighter";
+                        spiderCtx.beginPath();
+                        spiderCtx.moveTo(this.x, this.y);
+                        for (let i = 0; i < this.n; i++) this.segments[i].show();
+
+                        // HACKER PALETTE: Greens
+                        // Hue around 120 (Green). Vary intensity.
+                        spiderCtx.strokeStyle = `hsl(${this.rand * 40 + 100}, 100%, ${this.rand * 50 + 25}%)`;
+                        spiderCtx.lineWidth = this.rand * 1.5; // Thinner lines for clarity with high count
+                        spiderCtx.lineCap = "round";
+                        spiderCtx.lineJoin = "round";
+                        spiderCtx.stroke();
+                        spiderCtx.globalCompositeOperation = "source-over";
+                    }
+                }
+
+                show2(target) {
+                    // Only draw active nodes (Remove stars)
+                    if (dist(this.x, this.y, target.x, target.y) <= this.l) {
+                        spiderCtx.beginPath();
+                        spiderCtx.arc(this.x, this.y, 2 * this.rand + 1, 0, 2 * Math.PI);
+                        spiderCtx.fillStyle = "#00ff41"; // Hacker Green
+                        spiderCtx.fill();
+                    }
+                }
+            }
+
+            // Params
+            const maxl = 300; // Reduced Length from 450
+            const minl = 60;
+            const n = 30;     // Reduced segments from 45
+            const numt = 400; // Reduced tentacles from 800
+
+            const tent = [];
+            for (let i = 0; i < numt; i++) {
+                tent.push(new Tentacle(
+                    Math.random() * spiderW,
+                    Math.random() * spiderH,
+                    Math.random() * (maxl - minl) + minl,
+                    n
+                ));
+            }
+
+            const target = { x: spiderW / 2, y: spiderH / 2, errx: 0, erry: 0 };
+            const last_target = { x: target.x, y: target.y };
+            let t = 0;
+            const q = 10;
+
+            function draw() {
+                if (mouse.x !== false) {
+                    target.errx = mouse.x - target.x;
+                    target.erry = mouse.y - target.y;
+                } else {
+                    target.errx =
+                        spiderW / 2 +
+                        ((spiderH / 2 - q) * Math.sqrt(2) * Math.cos(t)) / (Math.pow(Math.sin(t), 2) + 1) -
+                        target.x;
+
+                    target.erry =
+                        spiderH / 2 +
+                        ((spiderH / 2 - q) * Math.sqrt(2) * Math.cos(t) * Math.sin(t)) / (Math.pow(Math.sin(t), 2) + 1) -
+                        target.y;
+                }
+
+                target.x += target.errx / 10;
+                target.y += target.erry / 10;
+                t += 0.01;
+
+                // Fade Effect (Nebula Style) - Increased alpha for less blur
+                spiderCtx.fillStyle = "rgba(0,0,0,0.15)";
+                spiderCtx.fillRect(0, 0, spiderW, spiderH);
+
+                // Core (Hacker Color) - Bright Green/White center
+                spiderCtx.beginPath();
+                spiderCtx.arc(target.x, target.y, dist(last_target.x, last_target.y, target.x, target.y) + 5, 0, 2 * Math.PI);
+                spiderCtx.fillStyle = "#ccffcc"; // Very light green
+                spiderCtx.fill();
+
+                for (let i = 0; i < numt; i++) {
+                    tent[i].move(last_target, target);
+                    tent[i].show2(target);
+                }
+                for (let i = 0; i < numt; i++) tent[i].show(target);
+
+                last_target.x = target.x;
+                last_target.y = target.y;
+            }
+
+            function loop() {
+                if (!spiderRunning) return;
+                window.requestAnimFrame(loop);
+                draw();
+            }
+
+            loop();
+
+            window.addEventListener("resize", () => {
+                const dpr = window.devicePixelRatio || 1;
+                spiderW = window.innerWidth;
+                spiderH = window.innerHeight;
+
+                spiderCanvas.width = spiderW * dpr;
+                spiderCanvas.height = spiderH * dpr;
+                spiderCtx.scale(dpr, dpr);
+                spiderCanvas.style.width = spiderW + 'px';
+                spiderCanvas.style.height = spiderH + 'px';
+            });
+
+            // Use the overlay for mouse events since it covers the screen
+            const overlay = document.getElementById('console-overlay');
+            overlay.addEventListener("mousemove", (e) => {
+                mouse.x = e.clientX;
+                mouse.y = e.clientY;
+            });
+
+            overlay.addEventListener("mouseleave", () => {
+                mouse.x = false;
+                mouse.y = false;
+            });
+        }
+        // --- COSMIC SPIDER JS END ---
+
+        async function startGeneration(event) {
+            event.preventDefault();
+
+            const form = document.getElementById('generateForm');
+            const formData = new FormData(form);
+
+            // Validate selection
+            const checked = document.querySelectorAll('input[name="cost_centers"]:checked');
+            if (checked.length === 0) {
+                alert("Seleziona almeno un Cost Center");
+                return;
+            }
+
+            // Show Console
+            document.getElementById('console-overlay').style.display = 'flex';
+            document.getElementById('finish-actions').style.display = 'none'; // Ensure hidden on new run
+            document.getElementById('status-blink').classList.add('blink');
+            document.getElementById('status-blink').innerText = 'PROCESSING';
+            document.getElementById('prog-bar').style.width = '0%';
+            document.getElementById('prog-text').innerText = '0%';
+            document.getElementById('console-log').innerHTML = ''; // Clear logs
+
+            // Start Visuals
+            startSpider();
+
+            log("INITIALIZING SYSTEM...");
+            log("CONNECTING TO CORE...");
+
+            try {
+                const response = await fetch('/generate', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error("Server error: " + response.statusText);
+                }
+
+                const data = await response.json();
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+
+                const jobId = data.job_id;
+                log(`JOB ID ASSIGNED: ${jobId}`);
+                log("STARTING BATCH PROCESSING...");
+
+                pollStatus(jobId);
+
+            } catch (e) {
+                log(`[CRITICAL ERROR] ${e.message}`);
+                document.getElementById('status-blink').classList.remove('blink');
+                document.getElementById('status-blink').innerText = "FAILED";
+                document.getElementById('status-blink').style.color = "red";
+            }
+        }
+
+        function log(message) {
+            const consoleBody = document.getElementById('console-log');
+            const p = document.createElement('div');
+            // Timestamp
+            const time = new Date().toLocaleTimeString('it-IT', { hour12: false });
+            p.innerText = `[${time}] > ${message}`;
+            consoleBody.appendChild(p);
+            consoleBody.scrollTop = consoleBody.scrollHeight;
+        }
+
+        async function pollStatus(jobId) {
+            const interval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/job/${jobId}`);
+                    const data = await response.json();
+
+                    if (data.error) {
+                        clearInterval(interval);
+                        log(`[ERROR] ${data.error}`);
+                        return;
+                    }
+
+                    // Update logs
+                    if (data.logs && data.logs.length > 0) {
+                        const currentLogs = document.getElementById('console-log').childElementCount;
+                        // The backend sends ALL logs.
+                        for (let i = currentLogs; i < data.logs.length; i++) {
+                            log(data.logs[i]);
+                        }
+                    }
+
+                    // Update Progress
+                    if (data.total > 0) {
+                        const pct = Math.round((data.progress / data.total) * 100);
+                        document.getElementById('prog-bar').style.width = pct + '%';
+                        document.getElementById('prog-text').innerText = pct + '%';
+                    }
+
+                    if (data.status === 'completed') {
+                        clearInterval(interval);
+                        log("PROCESS COMPLETED SUCCESSFULLY.");
+                        log("INITIATING DOWNLOAD SEQUENCE...");
+
+                        setTimeout(() => {
+                            window.location.href = `/download/${jobId}`;
+
+                            log("DOWNLOAD STARTED. SESSION TERMINATED.");
+                            document.getElementById('status-blink').innerText = "DONE";
+                            document.getElementById('status-blink').classList.remove('blink');
+
+                            // Show Home Button
+                            document.getElementById('finish-actions').style.display = 'block';
+
+                        }, 1000);
+                    } else if (data.status === 'failed') {
+                        clearInterval(interval);
+                        log(`[FATAL] Job Failed: ${data.error}`);
+                        document.getElementById('status-blink').innerText = "ERROR";
+                        document.getElementById('status-blink').style.color = "red";
+                    }
+
+                } catch (e) {
+                    console.error(e);
+                }
+            }, 500); // Poll every 500ms
+        }
+    </script>
+</head>
+
+<body>
+    <div class="container">
+        <div class="card">
+            <h1>Seleziona Cost Center</h1>
+            <p>Scegli i reparti per cui generare i PDF</p>
+
+            <form id="generateForm" onsubmit="startGeneration(event)">
+                <input type="hidden" name="file_id" value="{{ file_id }}">
+                <div class="actions">
+                    <div class="checkbox-wrapper">
+                        <input type="checkbox" onClick="toggleAll(this)" id="selectAll">
+                        <label for="selectAll">Seleziona Tutti</label>
+                    </div>
+                </div>
+
+                <div class="list-group">
+                    {% for cc, count in cost_centers.items() %}
+                    <div class="list-item">
+                        <div class="checkbox-wrapper">
+                            <input type="checkbox" name="cost_centers" value="{{ cc }}" checked
+                                id="cc_{{ loop.index }}">
+                            <label for="cc_{{ loop.index }}">
+                                {{ cc }}
+                            </label>
+                            <span class="badge">{{ count }} utenti</span>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <button type="submit" class="btn">Genera PDF</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Hacker Console Overlay -->
+    <div id="console-overlay">
+        <canvas id="spider-canvas"></canvas>
+        <div class="console-header">
+            <span>System Status: <span id="status-blink" class="blink">PROCESSING</span></span>
+            <span>v2.0.1-b</span>
+        </div>
+        <div id="console-log" class="console-body">
+            <!-- Logs go here -->
+        </div>
+        <div class="progress-container">
+            <div id="prog-bar" class="progress-bar"></div>
+            <div id="prog-text" class="progress-text">0%</div>
+        </div>
+
+        <div id="finish-actions" style="display: none; margin-top: 15px; text-align: center;">
+            <a href="/" class="btn"
+                style="background: #00ff41; color: #000; text-decoration: none; font-weight: bold; border: 1px solid #00ff41; display: inline-block;">TORNA
+                ALLA HOME</a>
+        </div>
+    </div>
+</body>
+
+</html>

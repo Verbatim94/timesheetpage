@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="it">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Timesheet Report</title>
+    <style>
+        :root {
+            --primary-text: #202124;
+            --secondary-text: #5f6368;
+            --border-color: #dadce0;
+            --header-bg: #ffffff;
+            --hover-bg: #f8f9fa;
+            --weekend-bg: #f8f9fa;
+            --accent-blue: #1a73e8;
+            --font-family: 'Roboto', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        }
+
+        @page {
+            size: A4 portrait;
+            margin: 0.5cm;
+        }
+
+        body {
+            font-family: var(--font-family);
+            font-size: 9px;
+            color: var(--primary-text);
+            margin: 0;
+            padding: 0;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+        }
+
+        /* HEADER */
+        .top-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .user-section {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .name-box {
+            font-size: 16px;
+            font-weight: 500;
+            color: var(--primary-text);
+        }
+
+        .info-section {
+            display: flex;
+            gap: 30px;
+        }
+
+        .info-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .info-label {
+            color: var(--secondary-text);
+            font-size: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 2px;
+        }
+
+        .info-value {
+            font-weight: 500;
+            font-size: 12px;
+        }
+
+        /* TABLE */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: sans-serif;
+            font-size: 5.5px;
+            /* Extremely small font to fit columns */
+            table-layout: fixed;
+        }
+
+        .hidden-day-header {
+            color: #1f3864 !important;
+            /* Start value same as background to hide text */
+        }
+
+        thead th {
+            font-weight: 500;
+            color: #ffffff;
+            /* White text for all headers by default */
+            text-align: center;
+            padding: 8px 0px;
+            border-bottom: 2px solid #ffffff;
+            /* White border to separate header */
+            background-color: #1f3864;
+            /* Dark blue background for ALL headers */
+            overflow: hidden;
+        }
+
+        /* Override specific text colors if needed, but default is white */
+        .month-header-cell {
+            color: #ffffff;
+        }
+
+        .col-plan {
+            text-align: left;
+            padding-left: 5px;
+            font-weight: 500;
+            color: var(--primary-text);
+            /* width: 300px; - Handled by colgroup */
+            /* Much wider */
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .col-total {
+            font-weight: 700;
+            color: var(--accent-blue);
+            background-color: #f8f9fa;
+            text-align: right;
+            padding-right: 2px;
+            width: 45px;
+        }
+
+        /* Specific adjustments for date headers */
+        .month-header-cell:nth-child(n+2):nth-last-child(n+2) {
+            /* Target day columns in header if possible, or just rely on autolayout */
+        }
+
+        /* ROWS */
+        td {
+            padding: 3px 0px;
+            /* Tighter vertical padding */
+            text-align: center;
+            border-bottom: 1px solid #f1f3f4;
+            color: var(--primary-text);
+            vertical-align: middle;
+        }
+
+        /* Month Column */
+        .col-month {
+            text-align: center;
+            font-weight: 500;
+            color: var(--secondary-text);
+            border-right: 1px solid #f1f3f4;
+            width: 30px;
+            font-size: 8px;
+            writing-mode: vertical-rl;
+            transform: rotate(180deg);
+        }
+
+        /* Plan Indent removed to match standard format */
+
+        /* Totals Row */
+        .row-total td {
+            font-weight: 700;
+            border-top: 1px solid var(--border-color);
+            border-bottom: 1px solid #1f3864 !important;
+            /* Thinner blue underline */
+            padding: 3px 0px;
+        }
+
+        /* Month Group Separator */
+        .month-separator td {
+            border-bottom: 2px solid var(--border-color);
+        }
+
+        /* Shading */
+        .shaded {
+            background-color: var(--weekend-bg);
+            color: var(--secondary-text);
+        }
+
+        /* Month Header Style */
+        .month-header-cell {
+            background-color: #1f3864 !important;
+            /* Navy Header */
+            color: #ffffff !important;
+            font-weight: 500;
+            border-bottom: 2px solid var(--border-color);
+            padding: 4px 1px;
+            text-align: center;
+        }
+
+        .invalid-date {
+            background: repeating-linear-gradient(45deg,
+                    #ffffff,
+                    #ffffff 4px,
+                    #f1f3f4 4px,
+                    #f1f3f4 8px);
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="top-header">
+        <div class="user-section">
+            <div class="name-box">{{ user_name }}</div>
+        </div>
+
+        <div class="info-section">
+            <div class="info-item">
+                <span class="info-label">Payroll Number</span>
+                <span class="info-value">{{ payroll_number }}</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">Cost Center</span>
+                <span class="info-value">{{ cost_center }}</span>
+            </div>
+        </div>
+
+        <div class="note-section">
+            All mentioned projects covered exclusively Research and Development activities.
+        </div>
+    </div>
+
+    {% for month_data in blocks %}
+    <div class="month-block" style="margin-bottom: 20px; page-break-inside: avoid;">
+        <table>
+            <colgroup>
+                <col style="width: 100px;">
+                {% for day in range(1, 32) %}
+                <col style="width: 13px;">
+                {% endfor %}
+                <col style="width: 18px;">
+            </colgroup>
+            <thead>
+                <tr>
+                    <th class="month-header-cell" style="text-align: left; padding-left: 8px;">{{ month_data.month_name
+                        }}
+                    </th>
+                    {% for day in range(1, 32) %}
+                    <th class="col-day {% if day > month_data.days_in_month %}hidden-day-header{% endif %}">{{ day }}
+                    </th>
+                    {% endfor %}
+                    <th class="month-header-cell" style="text-align: right; padding-right: 2px;">Tot</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- Total Row -->
+                <tr class="row-total">
+                    <td class="col-plan">Totale</td>
+                    {% for cell_val in month_data.total_row_cells %}
+                    {% set loop_index0 = loop.index0 %}
+                    {% set day_idx = loop.index %}
+                    {% if day_idx > month_data.days_in_month %}
+                    <td class="invalid-date"></td>
+                    {% else %}
+                    <td class="{% if month_data.total_row_day_shaded_status[loop_index0] %}shaded{% endif %}">{{
+                        cell_val }}</td>
+                    {% endif %}
+                    {% endfor %}
+                    <td style="font-weight: 700; text-align: right; padding-right: 2px;">{{ month_data.grand_total }}
+                    </td>
+                </tr>
+
+                {% for row in month_data.plans %}
+                <tr class="{% if row.is_total %}row-total{% endif %}">
+                    <td class="col-plan">{{ row.plan_name }}</td>
+
+                    {% for day_val in row.days %}
+                    {% if day_val.date_valid == false %}
+                    <td class="invalid-date"></td>
+                    {% else %}
+                    <td class="{% if day_val.shaded %}shaded{% endif %}">
+                        {{ day_val.value }}
+                    </td>
+                    {% endif %}
+                    {% endfor %}
+
+                    <td class="col-total">{{ row.total }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endfor %}
+
+</body>
+
+</html>
