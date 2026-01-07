@@ -19,4 +19,5 @@ EXPOSE 8107
 
 # Run application with Gunicorn
 # Uses PORT env var if set (Render), otherwise defaults to 8107 (Local)
-CMD ["sh", "-c", "gunicorn app:app --bind 0.0.0.0:${PORT:-8107} --workers 1 --threads 4 --timeout 180"]
+# Must use uvicorn worker for FastAPI (ASGI)
+CMD ["sh", "-c", "gunicorn app:app --workers 1 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8107} --timeout 180"]
