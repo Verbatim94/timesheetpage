@@ -413,16 +413,83 @@ def generate_user_excel(user_name: str, user_data: Dict[str, Any]) -> Optional[b
         print(f"Error generating Excel for {user_name}: {e}")
         return None
 
+import sqlite3
+import json
+import time # Added for time.time()
+
+# --- DATABASE SETUP ---
+DB_FILE = "jobs.db"
+
+def init_db():
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS jobs (
+                    job_id TEXT PRIMARY KEY,
+                    status TEXT,
+                    progress INTEGER,
+                    total INTEGER,
+                    logs TEXT,
+                    filename TEXT,
+                    created_at REAL,
+                    error TEXT
+                )
+            """)
+    except Exception as e:
+        print(f"DB Init Error: {e}")
+
+init_db()
+
+def create_job_in_db(job_id, total):
+    with sqlite3.connect(DB_FILE) as conn:
+        conn.execute(
+            "INSERT INTO jobs (job_id, status, progress, total, logs, filename, created_at, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (job_id, "queued", 0, total, "[]", None, time.time(), None)
+        )
+
+def update_job_progress(job_id, progress=None, status=None, log_msg=None, filename=None, error=None):
+    with sqlite3.connect(DB_FILE) as conn:
+        # Get current logs to append
+        if log_msg:
+            cur = conn.execute("SELECT logs FROM jobs WHERE job_id = ?", (job_id,))
+            row = cur.fetchone()
+            if row:
+                current_logs = json.loads(row[0]) if row[0] else []
+                current_logs.append(log_msg)
+                logs_json = json.dumps(current_logs)
+                conn.execute("UPDATE jobs SET logs = ? WHERE job_id = ?", (logs_json, job_id))
+
+        if progress is not None:
+             conn.execute("UPDATE jobs SET progress = ? WHERE job_id = ?", (progress, job_id))
+        
+        if status:
+             conn.execute("UPDATE jobs SET status = ? WHERE job_id = ?", (status, job_id))
+             
+        if filename:
+             conn.execute("UPDATE jobs SET filename = ? WHERE job_id = ?", (filename, job_id))
+             
+        if error:
+             conn.execute("UPDATE jobs SET error = ? WHERE job_id = ?", (error, job_id))
+
+def get_job_from_db(job_id):
+    with sqlite3.connect(DB_FILE) as conn:
+        # Use row factory for easier dict access
+        conn.row_factory = sqlite3.Row
+        cur = conn.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,))
+        row = cur.fetchone()
+        if row:
+            d = dict(row)
+            d['logs'] = json.loads(d['logs']) if d['logs'] else []
+            return d
+        return None
+
 async def process_generation_task(job_id: str, filtered_data: dict, generate_pdf_flag: bool = True, generate_excel_flag: bool = True):
-    jobs[job_id]["status"] = "processing"
-    jobs[job_id]["progress"] = 0
-    jobs[job_id]["total"] = len(filtered_data)
+    update_job_progress(job_id, status="processing", progress=0)
     
     try:
         zip_buffer = io.BytesIO()
         
         # We need a reusable function for core processing that can work with or without browser
-        async def process_user_content(user_name, user_data, browser_page=None):
             results_dict = {"user_name": user_name, "cc": user_data.get("cost_center")}
             
             try:
@@ -434,7 +501,7 @@ async def process_generation_task(job_id: str, filtered_data: dict, generate_pdf
                 
                 # 2. PDF Generation (Requires Browser)
                 if generate_pdf_flag and browser_page:
-                    jobs[job_id]["logs"].append(f"[TASK] Generating PDF for {user_name}...")
+                    update_job_progress(job_id, log_msg=f"[TASK] Generating PDF for {user_name}...")
                     
                     html_content = templates.get_template("timesheet_report.html").render(
                         user_name=user_name,
@@ -462,47 +529,55 @@ async def process_generation_task(job_id: str, filtered_data: dict, generate_pdf
                         margin={"top": "1cm", "right": "0.5cm", "bottom": "1.5cm", "left": "0.5cm"}
                     )
                     results_dict["pdf_bytes"] = pdf_bytes
-                    jobs[job_id]["logs"].append(f"[SUCCESS] {user_name} processed.")
+                    update_job_progress(job_id, log_msg=f"[SUCCESS] {user_name} processed.")
                 elif generate_excel_flag and not generate_pdf_flag:
-                     jobs[job_id]["logs"].append(f"[SUCCESS] {user_name} Excel generated.")
+                     update_job_progress(job_id, log_msg=f"[SUCCESS] {user_name} Excel generated.")
                 
                 return results_dict
                 
             except Exception as e:
-                jobs[job_id]["logs"].append(f"[ERROR] Failed {user_name}: {str(e)}")
+                update_job_progress(job_id, log_msg=f"[ERROR] Failed {user_name}: {str(e)}")
                 return None
 
         results = []
         
+        current_prog = 0
+        
         if generate_pdf_flag:
-            jobs[job_id]["logs"].append(f"[SYSTEM] Initializing browser engine...")
+            update_job_progress(job_id, log_msg=f"[SYSTEM] Initializing browser engine...")
             sem = asyncio.Semaphore(10) # Control concurrency
             async with async_playwright() as p:
                 browser = await p.chromium.launch()
                 
                 async def runner(name, data):
+                    nonlocal current_prog
                     async with sem:
                         page = await browser.new_page()
                         try:
-                            return await process_user_content(name, data, page)
+                            res = await process_user_content(name, data, page)
+                            current_prog += 1
+                            update_job_progress(job_id, progress=current_prog)
+                            return res
                         finally:
                             await page.close()
-                            jobs[job_id]["progress"] += 1
 
                 tasks = [runner(name, data) for name, data in filtered_data.items()]
                 results = await asyncio.gather(*tasks)
                 await browser.close()
         else:
             # Excel Only - No Browser Overhead
-            jobs[job_id]["logs"].append(f"[SYSTEM] Starting Excel-only generation (Fast Mode)...")
+            update_job_progress(job_id, log_msg=f"[SYSTEM] Starting Excel-only generation (Fast Mode)...")
             for i, (name, data) in enumerate(filtered_data.items()):
                 # No semaphore needed really for CPU bound simple task, but let's just loop
                 res = await process_user_content(name, data, None)
                 results.append(res)
-                jobs[job_id]["progress"] += 1
-                if i % 10 == 0: await asyncio.sleep(0.01) # Yield to event loop
+                current_prog += 1
+                # Batch updates to db every 5 items to reduce I/O lock contention? 
+                # For now simple update every item is safer for user feedback
+                update_job_progress(job_id, progress=current_prog)
+                if i % 10 == 0: await asyncio.sleep(0.01)
 
-        jobs[job_id]["logs"].append(f"[SYSTEM] Compressing files...")
+        update_job_progress(job_id, log_msg=f"[SYSTEM] Compressing files...")
         
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             for res in results:
@@ -529,14 +604,10 @@ async def process_generation_task(job_id: str, filtered_data: dict, generate_pdf
         with open(temp_filename, "wb") as f:
             f.write(zip_buffer.getvalue())
             
-        jobs[job_id]["filename"] = temp_filename
-        jobs[job_id]["status"] = "completed"
-        jobs[job_id]["logs"].append(f"[SYSTEM] Job Dispatched. Ready for download.")
+        update_job_progress(job_id, status="completed", filename=temp_filename, log_msg=f"[SYSTEM] Job Dispatched. Ready for download.")
         
     except Exception as e:
-        jobs[job_id]["status"] = "failed"
-        jobs[job_id]["error"] = str(e)
-        jobs[job_id]["logs"].append(f"[CRITICAL] Job Failed: {str(e)}")
+        update_job_progress(job_id, status="failed", error=str(e), log_msg=f"[CRITICAL] Job Failed: {str(e)}")
 
         if "Cost Center" in df.columns:
             # Group by Name to count users, not rows (assuming one cost center per user)
@@ -642,15 +713,9 @@ async def generate_pdf(background_tasks: BackgroundTasks,
         if not filtered_data:
              return JSONResponse({"error": "Nessun utente trovato"}, status_code=400)
 
-        # Create Job
+        # Create Job in DB
         job_id = str(uuid.uuid4())
-        jobs[job_id] = {
-            "status": "pending",
-            "progress": 0,
-            "total": len(filtered_data),
-            "logs": [],
-            "filename": None
-        }
+        create_job_in_db(job_id, len(filtered_data))
         
         # Start Background Task
         background_tasks.add_task(process_generation_task, job_id, filtered_data, generate_pdf_flag, generate_excel_flag)
@@ -662,13 +727,15 @@ async def generate_pdf(background_tasks: BackgroundTasks,
 
 @app.get("/job/{job_id}")
 async def get_job_status(job_id: str, username: str = Depends(get_current_username)):
-    if job_id not in jobs:
+    job = get_job_from_db(job_id)
+    if not job:
         return JSONResponse({"error": "Job not found"}, status_code=404)
-    return JSONResponse(jobs[job_id])
+    return JSONResponse(job)
 
 @app.get("/download/{job_id}")
 async def download_job(job_id: str, background_tasks: BackgroundTasks, username: str = Depends(get_current_username)):
-    if job_id not in jobs or jobs[job_id]["status"] != "completed":
+    job = get_job_from_db(job_id)
+    if not job or job["status"] != "completed" or not job["filename"]:
          return JSONResponse({"error": "File not ready"}, status_code=404)
          
     path = jobs[job_id]["filename"]
