@@ -415,7 +415,8 @@ def generate_user_excel(user_name: str, user_data: Dict[str, Any]) -> Optional[b
 
 import sqlite3
 import json
-import time # Added for time.time()
+import time 
+import gc # Garbage Collection for optimization
 
 # --- DATABASE SETUP ---
 DB_FILE = "jobs.db"
@@ -546,26 +547,51 @@ async def process_generation_task(job_id: str, filtered_data: dict, generate_pdf
         current_prog = 0
         
         if generate_pdf_flag:
-            update_job_progress(job_id, log_msg=f"[SYSTEM] Initializing browser engine...")
-            sem = asyncio.Semaphore(3) # Control concurrency (Lowered for stability on Render)
-            async with async_playwright() as p:
-                browser = await p.chromium.launch()
-                
-                async def runner(name, data):
-                    nonlocal current_prog
-                    async with sem:
-                        page = await browser.new_page()
-                        try:
-                            res = await process_user_content(name, data, page)
-                            current_prog += 1
-                            update_job_progress(job_id, progress=current_prog)
-                            return res
-                        finally:
-                            await page.close()
+            update_job_progress(job_id, log_msg=f"[SYSTEM] Initializing browser engine (Optimized Mode)...")
+            
+            # --- OPTIMIZATION: Browser Rotation & Chunking ---
+            # Process in chunks of 50 to prevent memory leaks/bloat
+            CHUNK_SIZE = 50
+            items = list(filtered_data.items())
+            
+            # Semaphore 2: Very stable, low resource usage
+            sem = asyncio.Semaphore(2) 
 
-                tasks = [runner(name, data) for name, data in filtered_data.items()]
-                results = await asyncio.gather(*tasks)
-                await browser.close()
+            for i in range(0, len(items), CHUNK_SIZE):
+                chunk = items[i:i + CHUNK_SIZE]
+                chunk_num = (i // CHUNK_SIZE) + 1
+                total_chunks = (len(items) + CHUNK_SIZE - 1) // CHUNK_SIZE
+                
+                update_job_progress(job_id, log_msg=f"[SYSTEM] Processing Batch {chunk_num}/{total_chunks}...")
+
+                # Launch a FRESH browser for each chunk
+                async with async_playwright() as p:
+                    # Add args to reduce memory usage
+                    browser = await p.chromium.launch(args=['--disable-dev-shm-usage', '--no-sandbox'])
+                    
+                    async def runner(name, data):
+                        nonlocal current_prog
+                        async with sem:
+                            page = await browser.new_page()
+                            try:
+                                res = await process_user_content(name, data, page)
+                                current_prog += 1
+                                update_job_progress(job_id, progress=current_prog)
+                                return res
+                            finally:
+                                await page.close()
+
+                    tasks = [runner(name, data) for name, data in chunk]
+                    chunk_results = await asyncio.gather(*tasks)
+                    # Extend main results list
+                    results.extend(chunk_results)
+                    
+                    await browser.close()
+                
+                # Force Garbage Collection after closing browser
+                gc.collect()
+                # Brief cool-down to let system settle
+                await asyncio.sleep(1)
         else:
             # Excel Only - No Browser Overhead
             update_job_progress(job_id, log_msg=f"[SYSTEM] Starting Excel-only generation (Fast Mode)...")
