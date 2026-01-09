@@ -569,7 +569,24 @@ async def process_generation_task(job_id: str, filtered_data: dict, generate_pdf
          return HTMLResponse(f"<h3>Errore nella lettura del file:</h3><p>{str(e)}</p>", status_code=400)
 
 @app.post("/generate")
-async def generate_pdf(background_tasks: BackgroundTasks, request: Request, cost_centers: List[str] = Form(...), file_id: str = Form(...), start_date: str = Form(...), end_date: str = Form(...), username: str = Depends(get_current_username)):
+async def generate_pdf(background_tasks: BackgroundTasks, 
+                      request: Request, 
+                      cost_centers: List[str] = Form(...), 
+                      file_id: str = Form(...), 
+                      start_date: str = Form(...), 
+                      end_date: str = Form(...), 
+                      output_pdf: Optional[str] = Form(None),
+                      output_excel: Optional[str] = Form(None),
+                      username: str = Depends(get_current_username)):
+    
+    # Checkbox logic: if checked, value is 'on'. If unchecked, None.
+    generate_pdf_flag = True if output_pdf == 'on' else False
+    generate_excel_flag = True if output_excel == 'on' else False
+    
+    # Fallback/Validation
+    if not generate_pdf_flag and not generate_excel_flag:
+         return JSONResponse({"error": "Seleziona almeno un formato di output"}, status_code=400)
+
     temp_file = f"temp_{file_id}.parquet"
     if not os.path.exists(temp_file):
         return JSONResponse({"error": "Sessione scaduta o file non trovato"}, status_code=400)
@@ -625,7 +642,7 @@ async def generate_pdf(background_tasks: BackgroundTasks, request: Request, cost
         }
         
         # Start Background Task
-        background_tasks.add_task(process_generation_task, job_id, filtered_data)
+        background_tasks.add_task(process_generation_task, job_id, filtered_data, generate_pdf_flag, generate_excel_flag)
         
         return JSONResponse({"job_id": job_id})
     
