@@ -413,97 +413,115 @@ def generate_user_excel(user_name: str, user_data: Dict[str, Any]) -> Optional[b
         print(f"Error generating Excel for {user_name}: {e}")
         return None
 
-async def process_generation_task(job_id: str, filtered_data: dict):
+async def process_generation_task(job_id: str, filtered_data: dict, generate_pdf_flag: bool = True, generate_excel_flag: bool = True):
     jobs[job_id]["status"] = "processing"
     jobs[job_id]["progress"] = 0
     jobs[job_id]["total"] = len(filtered_data)
     
     try:
         zip_buffer = io.BytesIO()
-        # Increased concurrency to 10 for speed boost
-        sem = asyncio.Semaphore(10)
         
-        jobs[job_id]["logs"].append(f"[SYSTEM] Initializing browser engine...")
-        
-        async with async_playwright() as p:
-            browser = await p.chromium.launch()
+        # We need a reusable function for core processing that can work with or without browser
+        async def process_user_content(user_name, user_data, browser_page=None):
+            results_dict = {"user_name": user_name, "cc": user_data.get("cost_center")}
             
-            async def process_single_user(user_name, user_data):
-                async with sem:
-                    try:
-                        jobs[job_id]["logs"].append(f"[TASK] Processing {user_name}...")
-                        
-                        # --- PDF GENERATION ---
-                        # Render HTML
-                        html_content = templates.get_template("timesheet_report.html").render(
-                            user_name=user_name,
-                            payroll_number=user_data["payroll"],
-                            cost_center=user_data["cost_center"],
-                            blocks=user_data["blocks"],
-                            is_shaded_col=lambda d: False 
-                        )
-                        
-                        footer_html = """
-        <div style="font-size: 8px; font-family: sans-serif; width: 100%; display: flex; justify-content: space-between; padding: 0 20px; color: #555;">
-            <span>Year: <span class="date"></span></span>
-            <span>Page <span class="pageNumber"></span> / <span class="totalPages"></span></span>
-            <span>Signature: __________________________</span>
-        </div>
-        """
+            try:
+                # 1. Excel Generation (Fast, CPU only)
+                if generate_excel_flag:
+                    # Sync call, but fast enough. If very slow, could offload to thread.
+                    excel_bytes = generate_user_excel(user_name, user_data)
+                    results_dict["excel_bytes"] = excel_bytes
+                
+                # 2. PDF Generation (Requires Browser)
+                if generate_pdf_flag and browser_page:
+                    jobs[job_id]["logs"].append(f"[TASK] Generating PDF for {user_name}...")
+                    
+                    html_content = templates.get_template("timesheet_report.html").render(
+                        user_name=user_name,
+                        payroll_number=user_data["payroll"],
+                        cost_center=user_data["cost_center"],
+                        blocks=user_data["blocks"],
+                        is_shaded_col=lambda d: False 
+                    )
+                    
+                    footer_html = """
+    <div style="font-size: 8px; font-family: sans-serif; width: 100%; display: flex; justify-content: space-between; padding: 0 20px; color: #555;">
+        <span>Year: <span class="date"></span></span>
+        <span>Page <span class="pageNumber"></span> / <span class="totalPages"></span></span>
+        <span>Signature: __________________________</span>
+    </div>
+    """
+                    await browser_page.set_content(html_content)
+                    pdf_bytes = await browser_page.pdf(
+                        format="A4",
+                        print_background=True,
+                        landscape=False,
+                        display_header_footer=True,
+                        header_template="<div></div>", 
+                        footer_template=footer_html,
+                        margin={"top": "1cm", "right": "0.5cm", "bottom": "1.5cm", "left": "0.5cm"}
+                    )
+                    results_dict["pdf_bytes"] = pdf_bytes
+                    jobs[job_id]["logs"].append(f"[SUCCESS] {user_name} processed.")
+                elif generate_excel_flag and not generate_pdf_flag:
+                     jobs[job_id]["logs"].append(f"[SUCCESS] {user_name} Excel generated.")
+                
+                return results_dict
+                
+            except Exception as e:
+                jobs[job_id]["logs"].append(f"[ERROR] Failed {user_name}: {str(e)}")
+                return None
 
+        results = []
+        
+        if generate_pdf_flag:
+            jobs[job_id]["logs"].append(f"[SYSTEM] Initializing browser engine...")
+            sem = asyncio.Semaphore(10) # Control concurrency
+            async with async_playwright() as p:
+                browser = await p.chromium.launch()
+                
+                async def runner(name, data):
+                    async with sem:
                         page = await browser.new_page()
-                        await page.set_content(html_content)
-                        
-                        pdf_bytes = await page.pdf(
-                            format="A4",
-                            print_background=True,
-                            landscape=False,
-                            display_header_footer=True,
-                            header_template="<div></div>", # Empty header
-                            footer_template=footer_html,
-                            margin={"top": "1cm", "right": "0.5cm", "bottom": "1.5cm", "left": "0.5cm"}
-                        )
-                        await page.close()
-                        
-                        # --- EXCEL GENERATION ---
-                        excel_bytes = generate_user_excel(user_name, user_data)
-                        
-                        # Update progress
-                        jobs[job_id]["progress"] += 1
-                        jobs[job_id]["logs"].append(f"[SUCCESS] {user_name} completed.")
-                        
-                        return user_name, user_data.get("cost_center"), pdf_bytes, excel_bytes
-                    except Exception as e:
-                        jobs[job_id]["logs"].append(f"[ERROR] Failed {user_name}: {str(e)}")
-                        return None
+                        try:
+                            return await process_user_content(name, data, page)
+                        finally:
+                            await page.close()
+                            jobs[job_id]["progress"] += 1
 
-            tasks = [process_single_user(name, data) for name, data in filtered_data.items()]
-            results = await asyncio.gather(*tasks)
-            
-            jobs[job_id]["logs"].append(f"[SYSTEM] Compressing files...")
-            
-            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-                for res in results:
-                    if not res: continue
-                    user_name, cc, pdf_bytes, excel_bytes = res
-                    
-                    # Sanitation
-                    cc_folder = str(cc).strip()
-                    cc_folder = "".join([c for c in cc_folder if c.isalnum() or c in (' ', '_', '-')]).strip()
-                    if not cc_folder: cc_folder = "NoCostCenter"
-                    
-                    safe_name = "".join([c for c in user_name if c.isalnum() or c in (' ', '_', '-')]).strip()
-                    
-                    # Write PDF
-                    if pdf_bytes:
-                        zf.writestr(f"{cc_folder}/PDF/{safe_name}.pdf", pdf_bytes)
-                    
-                    # Write Excel
-                    if excel_bytes:
-                        zf.writestr(f"{cc_folder}/Excel/{safe_name}.xlsx", excel_bytes)
-            
-            await browser.close()
-            
+                tasks = [runner(name, data) for name, data in filtered_data.items()]
+                results = await asyncio.gather(*tasks)
+                await browser.close()
+        else:
+            # Excel Only - No Browser Overhead
+            jobs[job_id]["logs"].append(f"[SYSTEM] Starting Excel-only generation (Fast Mode)...")
+            for i, (name, data) in enumerate(filtered_data.items()):
+                # No semaphore needed really for CPU bound simple task, but let's just loop
+                res = await process_user_content(name, data, None)
+                results.append(res)
+                jobs[job_id]["progress"] += 1
+                if i % 10 == 0: await asyncio.sleep(0.01) # Yield to event loop
+
+        jobs[job_id]["logs"].append(f"[SYSTEM] Compressing files...")
+        
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for res in results:
+                if not res: continue
+                user_name = res["user_name"]
+                cc = res["cc"]
+                
+                cc_folder = str(cc).strip()
+                cc_folder = "".join([c for c in cc_folder if c.isalnum() or c in (' ', '_', '-')]).strip()
+                if not cc_folder: cc_folder = "NoCostCenter"
+                
+                safe_name = "".join([c for c in user_name if c.isalnum() or c in (' ', '_', '-')]).strip()
+                
+                if "pdf_bytes" in res:
+                    zf.writestr(f"{cc_folder}/PDF/{safe_name}.pdf", res["pdf_bytes"])
+                
+                if "excel_bytes" in res:
+                     zf.writestr(f"{cc_folder}/Excel/{safe_name}.xlsx", res["excel_bytes"])
+        
         zip_buffer.seek(0)
         
         # Save to temp file
