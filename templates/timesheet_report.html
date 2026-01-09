@@ -6,14 +6,21 @@
     <title>Timesheet Report</title>
     <style>
         :root {
-            --primary-text: #202124;
-            --secondary-text: #5f6368;
-            --border-color: #dadce0;
+            --primary-text: #1e293b;
+            /* Slate 800 */
+            --secondary-text: #64748b;
+            /* Slate 500 */
+            --border-color: #e2e8f0;
+            /* Slate 200 */
             --header-bg: #ffffff;
-            --hover-bg: #f8f9fa;
-            --weekend-bg: #f8f9fa;
-            --accent-blue: #1a73e8;
-            --font-family: 'Roboto', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            --hover-bg: #f0f4f8;
+            --weekend-bg: #f8fafc;
+            /* Slate 50 */
+            --accent-blue: #3b82f6;
+            /* Web App Blue */
+            --header-col-bg: #1e293b;
+            /* Slate 800 for Table Headers */
+            --font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
         }
 
         @page {
@@ -87,7 +94,7 @@
         }
 
         .hidden-day-header {
-            color: #1f3864 !important;
+            color: var(--header-col-bg) !important;
             /* Start value same as background to hide text */
         }
 
@@ -99,8 +106,8 @@
             padding: 8px 0px;
             border-bottom: 2px solid #ffffff;
             /* White border to separate header */
-            background-color: #1f3864;
-            /* Dark blue background for ALL headers */
+            background-color: var(--header-col-bg);
+            /* Dark slate background for ALL headers */
             overflow: hidden;
         }
 
@@ -131,9 +138,7 @@
         }
 
         /* Specific adjustments for date headers */
-        .month-header-cell:nth-child(n+2):nth-last-child(n+2) {
-            /* Target day columns in header if possible, or just rely on autolayout */
-        }
+
 
         /* ROWS */
         td {
@@ -163,7 +168,7 @@
         .row-total td {
             font-weight: 700;
             border-top: 1px solid var(--border-color);
-            border-bottom: 1px solid #1f3864 !important;
+            border-bottom: 1px solid var(--header-col-bg) !important;
             /* Thinner blue underline */
             padding: 3px 0px;
         }
@@ -181,7 +186,7 @@
 
         /* Month Header Style */
         .month-header-cell {
-            background-color: #1f3864 !important;
+            background-color: var(--header-col-bg) !important;
             /* Navy Header */
             color: #ffffff !important;
             font-weight: 500;
