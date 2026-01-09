@@ -514,6 +514,25 @@
 
             <form id="generateForm" onsubmit="startGeneration(event)">
                 <input type="hidden" name="file_id" value="{{ file_id }}">
+                <div class="actions" style="border-bottom: none; margin-bottom: 0.5rem;">
+                    <h3 style="margin-bottom: 0.5rem; font-size: 1.1rem; color: var(--text-primary);">Filtra per Data
+                    </h3>
+                </div>
+                <div style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap;">
+                    <div style="flex: 1; min-width: 150px;">
+                        <label for="start_date"
+                            style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Dal:</label>
+                        <input type="date" id="start_date" name="start_date" value="{{ min_date }}" required
+                            style="width: 100%; padding: 0.5rem; border: 1px solid var(--border-color); border-radius: 0.5rem; background: var(--bg-color); color: var(--text-primary);">
+                    </div>
+                    <div style="flex: 1; min-width: 150px;">
+                        <label for="end_date"
+                            style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Al:</label>
+                        <input type="date" id="end_date" name="end_date" value="{{ max_date }}" required
+                            style="width: 100%; padding: 0.5rem; border: 1px solid var(--border-color); border-radius: 0.5rem; background: var(--bg-color); color: var(--text-primary);">
+                    </div>
+                </div>
+
                 <div class="actions">
                     <div class="checkbox-wrapper">
                         <input type="checkbox" onClick="toggleAll(this)" id="selectAll">

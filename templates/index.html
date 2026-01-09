@@ -33,24 +33,14 @@
         </div>
     </div>
 
-    <!-- Hacking Overlay -->
-    <div id="hacking-overlay">
-        <div class="terminal-window">
-            <div class="terminal-header">
-                <span>SYSTEM ANALYSIS MODULE v3.0</span>
-                <span>STATUS: ACTIVE</span>
-            </div>
-
-            <div class="log-area" id="logArea">
-                <div class="log-entry">> INITIALIZING SYSTEM...</div>
-            </div>
-
+    <!-- Loading Overlay -->
+    <div id="loading-overlay">
+        <div class="loading-content">
+            <div class="spinner"></div>
+            <div class="loading-text">Elaborazione in corso</div>
+            <div class="loading-subtext">Stiamo preparando i tuoi report PDF...</div>
             <div class="progress-container">
                 <div class="progress-bar" id="progressBar"></div>
-            </div>
-
-            <div style="text-align: right; font-size: 0.8rem;">
-                PROCESSING_NODE: <span class="blink">_</span>
             </div>
         </div>
     </div>
@@ -60,9 +50,8 @@
         const fileInput = document.getElementById('fileInput');
         const uploadText = document.getElementById('uploadText');
         const uploadForm = document.getElementById('uploadForm');
-        const overlay = document.getElementById('hacking-overlay');
+        const overlay = document.getElementById('loading-overlay');
         const progressBar = document.getElementById('progressBar');
-        const logArea = document.getElementById('logArea');
 
         // Drag and drop effects
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
@@ -109,27 +98,6 @@
             uploadText.innerHTML = `File selezionato: <strong>${file.name}</strong>`;
         }
 
-        // Hacking Simulation Logic
-        const logs = [
-            "ACCESSING MAINFRAME REPOSITORY...",
-            "BYPASSING SECURITY PROTOCOLS...",
-            "DECRYPTING DATA STREAMS...",
-            "ANALYZING XLS STRUCTURE...",
-            "IDENTIFYING USER PATTERNS...",
-            "CALCULATING WORKSHEET VECTORS...",
-            "OPTIMIZING COST CENTER MATRIX...",
-            "VERIFYING INTEGRITY CHECKSUMS...",
-            "COMPILING REPORT METADATA..."
-        ];
-
-        function addLog(text) {
-            const div = document.createElement('div');
-            div.className = 'log-entry';
-            div.textContent = `> ${text}`;
-            logArea.appendChild(div);
-            logArea.scrollTop = logArea.scrollHeight;
-        }
-
         uploadForm.addEventListener('submit', function (e) {
             e.preventDefault();
 
@@ -158,27 +126,21 @@
                 if (xhr.status === 200) {
                     // Upload done, simulate processing
                     let progress = 40;
-                    let logIndex = 0;
 
                     const interval = setInterval(() => {
-                        progress += Math.random() * 5;
+                        progress += 2; // Faster simulation for professional feel
                         if (progress > 100) progress = 100;
                         progressBar.style.width = progress + '%';
 
-                        if (Math.random() > 0.6 && logIndex < logs.length) {
-                            addLog(logs[logIndex++]);
-                        }
-
                         if (progress === 100) {
                             clearInterval(interval);
-                            addLog("PROCESS COMPLETE. REDIRECTING...");
                             setTimeout(() => {
                                 document.open();
                                 document.write(xhr.responseText);
                                 document.close();
-                            }, 500);
+                            }, 200);
                         }
-                    }, 100);
+                    }, 50);
                 } else {
                     alert("Errore nell'analisi del file.");
                     overlay.style.display = 'none';

@@ -312,6 +312,82 @@ async def index(request: Request, username: str = Depends(get_current_username))
 async def robots():
     return "User-agent: *\\nDisallow: /"
 
+def generate_user_excel(user_name: str, user_data: Dict[str, Any]) -> Optional[bytes]:
+    """Generates an Excel file with one sheet per month."""
+    try:
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            for block in user_data["blocks"]:
+                month_name = block["month_name"]
+                # Safe sheet name (max 31 chars)
+                sheet_name = month_name[:30]
+                
+                # Prepare data for DataFrame
+                # Columns: Plan, 1..31, Total
+                data_rows = []
+                
+                # Headers
+                columns = ["Plan"] + [str(d) for d in range(1, 32)] + ["Total"]
+                
+                # Plan Rows
+                for plan in block["plans"]:
+                    row = {"Plan": plan["plan_name"]}
+                    # Fill days
+                    for i, day_cell in enumerate(plan["days"]):
+                        # day_cell is {"value": "12,00", "shaded": bool}
+                        # We need raw numbers for Excel if possible, or string is fine. 
+                        # User wants friendly format.
+                        val = day_cell["value"]
+                        # Convert back to float for Excel math if needed, or keep as string?
+                        # Let's keep as number if possible for calculations
+                        try:
+                            if val:
+                                row[str(i+1)] = float(val.replace(',', '.'))
+                            else:
+                                row[str(i+1)] = None
+                        except:
+                            row[str(i+1)] = val
+                            
+                    # Total
+                    try:
+                        if plan["total"]:
+                            row["Total"] = float(plan["total"].replace(',', '.'))
+                        else:
+                            row["Total"] = None
+                    except:
+                        row["Total"] = plan["total"]
+                        
+                    data_rows.append(row)
+                
+                # Total Row
+                total_row = {"Plan": "TOTALE"}
+                for i, val in enumerate(block["total_row_cells"]):
+                    # val is string "12,00"
+                    try:
+                        if val:
+                             total_row[str(i+1)] = float(val.replace(',', '.'))
+                        else:
+                             total_row[str(i+1)] = None
+                    except:
+                        total_row[str(i+1)] = val
+                
+                if block["grand_total"]:
+                     try:
+                        total_row["Total"] = float(block["grand_total"].replace(',', '.'))
+                     except:
+                        total_row["Total"] = block["grand_total"]
+                
+                data_rows.append(total_row)
+                
+                # Create DataFrame
+                df_sheet = pd.DataFrame(data_rows, columns=columns)
+                df_sheet.to_excel(writer, sheet_name=sheet_name, index=False)
+                
+        return output.getvalue()
+    except Exception as e:
+        print(f"Error generating Excel for {user_name}: {e}")
+        return None
+
 async def process_generation_task(job_id: str, filtered_data: dict):
     jobs[job_id]["status"] = "processing"
     jobs[job_id]["progress"] = 0
@@ -327,11 +403,12 @@ async def process_generation_task(job_id: str, filtered_data: dict):
         async with async_playwright() as p:
             browser = await p.chromium.launch()
             
-            async def generate_single_pdf(user_name, user_data):
+            async def process_single_user(user_name, user_data):
                 async with sem:
                     try:
-                        jobs[job_id]["logs"].append(f"[TASK] Generating PDF for {user_name}...")
+                        jobs[job_id]["logs"].append(f"[TASK] Processing {user_name}...")
                         
+                        # --- PDF GENERATION ---
                         # Render HTML
                         html_content = templates.get_template("timesheet_report.html").render(
                             user_name=user_name,
@@ -363,16 +440,19 @@ async def process_generation_task(job_id: str, filtered_data: dict):
                         )
                         await page.close()
                         
+                        # --- EXCEL GENERATION ---
+                        excel_bytes = generate_user_excel(user_name, user_data)
+                        
                         # Update progress
                         jobs[job_id]["progress"] += 1
                         jobs[job_id]["logs"].append(f"[SUCCESS] {user_name} completed.")
                         
-                        return user_name, user_data.get("cost_center"), pdf_bytes
+                        return user_name, user_data.get("cost_center"), pdf_bytes, excel_bytes
                     except Exception as e:
                         jobs[job_id]["logs"].append(f"[ERROR] Failed {user_name}: {str(e)}")
                         return None
 
-            tasks = [generate_single_pdf(name, data) for name, data in filtered_data.items()]
+            tasks = [process_single_user(name, data) for name, data in filtered_data.items()]
             results = await asyncio.gather(*tasks)
             
             jobs[job_id]["logs"].append(f"[SYSTEM] Compressing files...")
@@ -380,16 +460,22 @@ async def process_generation_task(job_id: str, filtered_data: dict):
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                 for res in results:
                     if not res: continue
-                    user_name, cc, pdf_bytes = res
+                    user_name, cc, pdf_bytes, excel_bytes = res
                     
-                    # Add to zip with folder structure: Cost Center / User.pdf
+                    # Sanitation
                     cc_folder = str(cc).strip()
                     cc_folder = "".join([c for c in cc_folder if c.isalnum() or c in (' ', '_', '-')]).strip()
                     if not cc_folder: cc_folder = "NoCostCenter"
                     
                     safe_name = "".join([c for c in user_name if c.isalnum() or c in (' ', '_', '-')]).strip()
                     
-                    zf.writestr(f"{cc_folder}/{safe_name}.pdf", pdf_bytes)
+                    # Write PDF
+                    if pdf_bytes:
+                        zf.writestr(f"{cc_folder}/PDF/{safe_name}.pdf", pdf_bytes)
+                    
+                    # Write Excel
+                    if excel_bytes:
+                        zf.writestr(f"{cc_folder}/Excel/{safe_name}.xlsx", excel_bytes)
             
             await browser.close()
             
@@ -409,8 +495,38 @@ async def process_generation_task(job_id: str, filtered_data: dict):
         jobs[job_id]["error"] = str(e)
         jobs[job_id]["logs"].append(f"[CRITICAL] Job Failed: {str(e)}")
 
+        if "Cost Center" in df.columns:
+            # Group by Name to count users, not rows (assuming one cost center per user)
+            # Use 'first' to get a representative cost center for the user
+            users_cc = df.groupby("Name")["Cost Center"].first()
+            # Handle potential None/NaN values in cost center
+            users_cc = users_cc.fillna("Unknown")
+            cost_centers = users_cc.value_counts().to_dict()
+        else:
+            cost_centers = {"Unknown": df["Name"].nunique()}
+
+        # Date Range Calculation
+        if not df["DateObj"].empty:
+            min_date = df["DateObj"].min().date().isoformat()
+            max_date = df["DateObj"].max().date().isoformat()
+        else:
+            today = datetime.date.today().isoformat()
+            min_date = today
+            max_date = today
+
+        return templates.TemplateResponse("select_cost_centers.html", {
+            "request": request,
+            "cost_centers": cost_centers,
+            "file_id": file_id,
+            "min_date": min_date,
+            "max_date": max_date
+        })
+        
+    except Exception as e:
+         return HTMLResponse(f"<h3>Errore nella lettura del file:</h3><p>{str(e)}</p>", status_code=400)
+
 @app.post("/generate")
-async def generate_pdf(background_tasks: BackgroundTasks, request: Request, cost_centers: List[str] = Form(...), file_id: str = Form(...), username: str = Depends(get_current_username)):
+async def generate_pdf(background_tasks: BackgroundTasks, request: Request, cost_centers: List[str] = Form(...), file_id: str = Form(...), start_date: str = Form(...), end_date: str = Form(...), username: str = Depends(get_current_username)):
     temp_file = f"temp_{file_id}.parquet"
     if not os.path.exists(temp_file):
         return JSONResponse({"error": "Sessione scaduta o file non trovato"}, status_code=400)
@@ -424,6 +540,21 @@ async def generate_pdf(background_tasks: BackgroundTasks, request: Request, cost
             os.remove(temp_file)
         except:
             pass
+            
+        # --- DATE FILTERING ---
+        if start_date and end_date:
+            # Convert string inputs to timestamp/datetime to match df['DateObj']
+            s_date = pd.to_datetime(start_date)
+            e_date = pd.to_datetime(end_date)
+            
+            # Filter
+            df = df[
+                (df["DateObj"] >= s_date) & 
+                (df["DateObj"] <= e_date)
+            ]
+            
+            if df.empty:
+                return JSONResponse({"error": "Nessun dato trovato nel range di date selezionato."}, status_code=400)
         
         try:
             data = build_users_dict(df)
