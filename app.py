@@ -519,7 +519,7 @@ async def process_generation_task(job_id: str, filtered_data: dict, generate_pdf
         <span>Signature: __________________________</span>
     </div>
     """
-                    await browser_page.set_content(html_content)
+                    await browser_page.set_content(html_content, wait_until="domcontentloaded", timeout=60000)
                     pdf_bytes = await browser_page.pdf(
                         format="A4",
                         print_background=True,
@@ -527,7 +527,8 @@ async def process_generation_task(job_id: str, filtered_data: dict, generate_pdf
                         display_header_footer=True,
                         header_template="<div></div>", 
                         footer_template=footer_html,
-                        margin={"top": "1cm", "right": "0.5cm", "bottom": "1.5cm", "left": "0.5cm"}
+                        margin={"top": "1cm", "right": "0.5cm", "bottom": "1.5cm", "left": "0.5cm"},
+                        timeout=60000
                     )
                     results_dict["pdf_bytes"] = pdf_bytes
                     update_job_progress(job_id, log_msg=f"[SUCCESS] {user_name} processed.")
@@ -546,7 +547,7 @@ async def process_generation_task(job_id: str, filtered_data: dict, generate_pdf
         
         if generate_pdf_flag:
             update_job_progress(job_id, log_msg=f"[SYSTEM] Initializing browser engine...")
-            sem = asyncio.Semaphore(10) # Control concurrency
+            sem = asyncio.Semaphore(3) # Control concurrency (Lowered for stability on Render)
             async with async_playwright() as p:
                 browser = await p.chromium.launch()
                 
