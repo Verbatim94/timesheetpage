@@ -550,10 +550,11 @@ async def process_generation_task(job_id: str, filtered_data: dict, generate_pdf
 
         # Date Range Calculation
         if not df["DateObj"].empty:
-            min_date = df["DateObj"].min().date().isoformat()
-            max_date = df["DateObj"].max().date().isoformat()
+            # Format as YYYY-MM for month input
+            min_date = df["DateObj"].min().strftime('%Y-%m')
+            max_date = df["DateObj"].max().strftime('%Y-%m')
         else:
-            today = datetime.date.today().isoformat()
+            today = datetime.date.today().strftime('%Y-%m')
             min_date = today
             max_date = today
 
@@ -603,18 +604,28 @@ async def generate_pdf(background_tasks: BackgroundTasks,
             
         # --- DATE FILTERING ---
         if start_date and end_date:
-            # Convert string inputs to timestamp/datetime to match df['DateObj']
-            s_date = pd.to_datetime(start_date)
-            e_date = pd.to_datetime(end_date)
-            
-            # Filter
-            df = df[
-                (df["DateObj"] >= s_date) & 
-                (df["DateObj"] <= e_date)
-            ]
-            
-            if df.empty:
-                return JSONResponse({"error": "Nessun dato trovato nel range di date selezionato."}, status_code=400)
+            try:
+                # Expecting YYYY-MM
+                # Start: 1st of the month
+                s_date = pd.to_datetime(start_date + "-01")
+                
+                # End: Last day of the month
+                # Create a date for the 1st of the month, then add MonthEnd
+                e_date_start = pd.to_datetime(end_date + "-01")
+                e_date = e_date_start + pd.tseries.offsets.MonthEnd(0)
+                
+                # Filter
+                df = df[
+                    (df["DateObj"] >= s_date) & 
+                    (df["DateObj"] <= e_date)
+                ]
+                
+                if df.empty:
+                    return JSONResponse({"error": "Nessun dato trovato nel range di date selezionato."}, status_code=400)
+            except Exception as date_e:
+                print(f"Date Error: {date_e}")
+                # Fallback if parsing fails (old format?)
+                pass
         
         try:
             data = build_users_dict(df)
