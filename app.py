@@ -620,22 +620,10 @@ async def process_generation_task(job_id: str, filtered_data: dict, generate_pdf
         else:
             cost_centers = {"Unknown": df["Name"].nunique()}
 
-        # Date Range Calculation
-        if not df["DateObj"].empty:
-            # Format as YYYY-MM for month input
-            min_date = df["DateObj"].min().strftime('%Y-%m')
-            max_date = df["DateObj"].max().strftime('%Y-%m')
-        else:
-            today = datetime.date.today().strftime('%Y-%m')
-            min_date = today
-            max_date = today
-
         return templates.TemplateResponse("select_cost_centers.html", {
             "request": request,
             "cost_centers": cost_centers,
-            "file_id": file_id,
-            "min_date": min_date,
-            "max_date": max_date
+            "file_id": file_id
         })
         
     except Exception as e:
@@ -646,8 +634,6 @@ async def generate_pdf(background_tasks: BackgroundTasks,
                       request: Request, 
                       cost_centers: List[str] = Form(...), 
                       file_id: str = Form(...), 
-                      start_date: str = Form(...), 
-                      end_date: str = Form(...), 
                       output_pdf: Optional[str] = Form(None),
                       output_excel: Optional[str] = Form(None),
                       username: str = Depends(get_current_username)):
@@ -674,30 +660,7 @@ async def generate_pdf(background_tasks: BackgroundTasks,
         except:
             pass
             
-        # --- DATE FILTERING ---
-        if start_date and end_date:
-            try:
-                # Expecting YYYY-MM
-                # Start: 1st of the month
-                s_date = pd.to_datetime(start_date + "-01")
-                
-                # End: Last day of the month
-                # Create a date for the 1st of the month, then add MonthEnd
-                e_date_start = pd.to_datetime(end_date + "-01")
-                e_date = e_date_start + pd.tseries.offsets.MonthEnd(0)
-                
-                # Filter
-                df = df[
-                    (df["DateObj"] >= s_date) & 
-                    (df["DateObj"] <= e_date)
-                ]
-                
-                if df.empty:
-                    return JSONResponse({"error": "Nessun dato trovato nel range di date selezionato."}, status_code=400)
-            except Exception as date_e:
-                print(f"Date Error: {date_e}")
-                # Fallback if parsing fails (old format?)
-                pass
+        # --- DATE FILTERING REMOVED: Processing all data ---
         
         try:
             data = build_users_dict(df)

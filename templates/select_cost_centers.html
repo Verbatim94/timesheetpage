@@ -259,40 +259,8 @@
                 <div
                     style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2rem; margin-bottom: 2rem; background: var(--hover-bg); padding: 1.5rem; border-radius: 0.75rem; border: 1px solid var(--border-color);">
 
-                    <!-- Date Range -->
-                    <div>
-                        <h3
-                            style="margin: 0 0 1rem; font-size: 1rem; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 0.5rem;">
-                            <!-- Icon Calendar -->
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
-                                <line x1="16" y1="2" x2="16" y2="6"></line>
-                                <line x1="8" y1="2" x2="8" y2="6"></line>
-                                <line x1="3" y1="10" x2="21" y2="10"></line>
-                            </svg>
-                            Periodo di Analisi
-                        </h3>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
-                            <div>
-                                <label for="start_date"
-                                    style="display: block; font-size: 0.8rem; font-weight: 500; color: var(--text-secondary); margin-bottom: 0.4rem;">Dal</label>
-                                <input type="month" id="start_date" name="start_date" value="{{ min_date }}"
-                                    min="{{ min_date }}" max="{{ max_date }}" required
-                                    style="width: 100%; padding: 0.6rem; border: 1px solid var(--border-color); border-radius: 0.5rem; background: #fff; color: var(--text-primary); font-family: inherit;">
-                            </div>
-                            <div>
-                                <label for="end_date"
-                                    style="display: block; font-size: 0.8rem; font-weight: 500; color: var(--text-secondary); margin-bottom: 0.4rem;">Al</label>
-                                <input type="month" id="end_date" name="end_date" value="{{ max_date }}"
-                                    min="{{ min_date }}" max="{{ max_date }}" required
-                                    style="width: 100%; padding: 0.6rem; border: 1px solid var(--border-color); border-radius: 0.5rem; background: #fff; color: var(--text-primary); font-family: inherit;">
-                            </div>
-                        </div>
-                        <p style="margin-top: 0.5rem; font-size: 0.75rem; color: var(--text-secondary);">
-                            *Range rilevato dal file: {{ min_date }} - {{ max_date }}
-                        </p>
-                    </div>
+                    <!-- Date Range Removed as per user request -->
+                    <div style="display: none;"></div>
 
                     <!-- Output Format -->
                     <div>
