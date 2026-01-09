@@ -387,9 +387,18 @@
             const formData = new FormData(form);
 
             // Validate selection
-            const checked = document.querySelectorAll('input[name="cost_centers"]:checked');
-            if (checked.length === 0) {
+            // Validate selection
+            const checkedCC = document.querySelectorAll('input[name="cost_centers"]:checked');
+            if (checkedCC.length === 0) {
                 alert("Seleziona almeno un Cost Center");
+                return;
+            }
+
+            const pdfChecked = document.querySelector('input[name="output_pdf"]').checked;
+            const excelChecked = document.querySelector('input[name="output_excel"]').checked;
+
+            if (!pdfChecked && !excelChecked) {
+                alert("Seleziona almeno un formato di output (PDF o Excel)");
                 return;
             }
 
