@@ -313,33 +313,53 @@ async def robots():
     return "User-agent: *\\nDisallow: /"
 
 def generate_user_excel(user_name: str, user_data: Dict[str, Any]) -> Optional[bytes]:
-    """Generates an Excel file with one sheet per month."""
+    """Generates an Excel file with one single sheet containing all tables stacked."""
     try:
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            
+            all_data_rows = []
+            
+            # Headers for the columns
+            columns = ["Plan"] + [str(d) for d in range(1, 32)] + ["Total"]
+            
             for block in user_data["blocks"]:
                 month_name = block["month_name"]
-                # Safe sheet name (max 31 chars)
-                sheet_name = month_name[:30]
                 
-                # Prepare data for DataFrame
-                # Columns: Plan, 1..31, Total
-                data_rows = []
+                # Add a Header Row for the Month
+                # We can simulate this by adding a row with "Plan" = Month Name and rest empty/None
+                # But to make it distinct, let's put it in the 'Plan' column or a separate row structure
                 
-                # Headers
-                columns = ["Plan"] + [str(d) for d in range(1, 32)] + ["Total"]
+                # 1. Month Header Row
+                month_header_row = {c: None for c in columns}
+                month_header_row["Plan"] = f"--- {month_name} ---"
+                all_data_rows.append(month_header_row)
                 
+                # 2. Column Headers Row (Plan, 1, 2 ... Total)
+                # If we want the headers to repeat for each table:
+                # We can just append the dict representation of headers, but DataFrame keys are fixed.
+                # Actually, pandas to_excel writes headers once. 
+                # To stack tables, we might need to be clever.
+                
+                # Simplest approach for "Stacked Tables" in one DataFrame:
+                # Just treat headers as data rows.
+                
+                # Table Header Row
+                # We need to explicitly add a row that LOOKS like the header
+                # OR we rely on the first print.
+                # Let's add the numeric headers as a row for every month for clarity
+                headers_row = {c: c for c in columns}
+                all_data_rows.append(headers_row)
+
                 # Plan Rows
                 for plan in block["plans"]:
                     row = {"Plan": plan["plan_name"]}
                     # Fill days
                     for i, day_cell in enumerate(plan["days"]):
-                        # day_cell is {"value": "12,00", "shaded": bool}
-                        # We need raw numbers for Excel if possible, or string is fine. 
-                        # User wants friendly format.
                         val = day_cell["value"]
-                        # Convert back to float for Excel math if needed, or keep as string?
-                        # Let's keep as number if possible for calculations
+                        # We try to keep numbers as numbers, strings as strings
+                        # But since we are mixing with header strings in the same column, 
+                        # pandas might force object type (string). That's usually fine for a report.
                         try:
                             if val:
                                 row[str(i+1)] = float(val.replace(',', '.'))
@@ -357,12 +377,11 @@ def generate_user_excel(user_name: str, user_data: Dict[str, Any]) -> Optional[b
                     except:
                         row["Total"] = plan["total"]
                         
-                    data_rows.append(row)
+                    all_data_rows.append(row)
                 
-                # Total Row
+                # Total Row for the month
                 total_row = {"Plan": "TOTALE"}
                 for i, val in enumerate(block["total_row_cells"]):
-                    # val is string "12,00"
                     try:
                         if val:
                              total_row[str(i+1)] = float(val.replace(',', '.'))
@@ -377,11 +396,17 @@ def generate_user_excel(user_name: str, user_data: Dict[str, Any]) -> Optional[b
                      except:
                         total_row["Total"] = block["grand_total"]
                 
-                data_rows.append(total_row)
+                all_data_rows.append(total_row)
                 
-                # Create DataFrame
-                df_sheet = pd.DataFrame(data_rows, columns=columns)
-                df_sheet.to_excel(writer, sheet_name=sheet_name, index=False)
+                # Empty Spacer Row
+                all_data_rows.append({c: None for c in columns})
+                
+            # Create DataFrame
+            df_sheet = pd.DataFrame(all_data_rows, columns=columns)
+            
+            # Write to Excel
+            # header=False because we manually embedded headers for each block
+            df_sheet.to_excel(writer, sheet_name="Report", index=False, header=False)
                 
         return output.getvalue()
     except Exception as e:
