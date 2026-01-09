@@ -490,6 +490,7 @@ async def process_generation_task(job_id: str, filtered_data: dict, generate_pdf
         zip_buffer = io.BytesIO()
         
         # We need a reusable function for core processing that can work with or without browser
+        async def process_user_content(user_name, user_data, browser_page=None):
             results_dict = {"user_name": user_name, "cc": user_data.get("cost_center")}
             
             try:
