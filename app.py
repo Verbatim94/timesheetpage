@@ -181,7 +181,7 @@ def build_users_dict(df: pd.DataFrame) -> Dict[str, Any]:
             month_df = user_df[
                 (user_df['DateObj'].dt.year == year) & 
                 (user_df['DateObj'].dt.month == month)
-            ]
+            ].copy()
             
             # Build matrix
             month_df['Day'] = month_df['DateObj'].dt.day
@@ -729,12 +729,12 @@ async def download_job(job_id: str, background_tasks: BackgroundTasks, username:
     if not job or job["status"] != "completed" or not job["filename"]:
          return JSONResponse({"error": "File not ready"}, status_code=404)
          
-    path = jobs[job_id]["filename"]
+    path = job["filename"]
     
     def cleanup():
         try:
             os.remove(path)
-            del jobs[job_id]
+            # del jobs[job_id] # Jobs are now in DB, no need to delete from memory dict
         except:
             pass
             
