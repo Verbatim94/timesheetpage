@@ -549,61 +549,46 @@ async def process_generation_task(job_id: str, filtered_data: dict, generate_pdf
         current_prog = 0
         
         if generate_pdf_flag:
-            update_job_progress(job_id, log_msg=f"[SYSTEM] Initializing browser engine (Optimized Mode)...")
+            update_job_progress(job_id, log_msg=f"[SYSTEM] Initializing browser engine...")
             
-            # --- OPTIMIZATION: Browser Rotation & Chunking ---
-            # Process in chunks of 50 to prevent memory leaks/bloat
-            CHUNK_SIZE = 50
-            items = list(filtered_data.items())
-            
-            # Semaphore 2: Very stable, low resource usage
-            sem = asyncio.Semaphore(2) 
-
-            for i in range(0, len(items), CHUNK_SIZE):
-                chunk = items[i:i + CHUNK_SIZE]
-                chunk_num = (i // CHUNK_SIZE) + 1
-                total_chunks = (len(items) + CHUNK_SIZE - 1) // CHUNK_SIZE
+            async with async_playwright() as p:
+                # Launch browser once
+                browser = await p.chromium.launch(args=['--disable-dev-shm-usage', '--no-sandbox'])
                 
-                update_job_progress(job_id, log_msg=f"[SYSTEM] Processing Batch {chunk_num}/{total_chunks}...")
-
-                # Launch a FRESH browser for each chunk
-                async with async_playwright() as p:
-                    # Add args to reduce memory usage
-                    browser = await p.chromium.launch(args=['--disable-dev-shm-usage', '--no-sandbox'])
-                    
-                    async def runner(name, data):
-                        nonlocal current_prog
-                        async with sem:
-                            page = await browser.new_page()
-                            try:
-                                res = await process_user_content(name, data, page)
-                                current_prog += 1
-                                update_job_progress(job_id, progress=current_prog)
-                                return res
-                            finally:
-                                await page.close()
-
-                    tasks = [runner(name, data) for name, data in chunk]
-                    chunk_results = await asyncio.gather(*tasks)
-                    # Extend main results list
-                    results.extend(chunk_results)
-                    
+                try:
+                    total_items = len(filtered_data)
+                    for i, (name, data) in enumerate(filtered_data.items()):
+                        # Process sequentially for maximum stability
+                        page = await browser.new_page()
+                        try:
+                            # 1. Processing (PDF + Excel if needed logic is inside process_user_content)
+                            # But wait, original logic had process_user_content handle both.
+                            # Let's keep it simple: call the helper.
+                            res = await process_user_content(name, data, page)
+                            results.append(res)
+                            
+                            current_prog += 1
+                            update_job_progress(job_id, progress=current_prog)
+                            
+                        except Exception as e:
+                            print(f"Error processing {name}: {e}")
+                            update_job_progress(job_id, log_msg=f"[ERROR] {name}: {e}")
+                        finally:
+                            await page.close()
+                            
+                        # Brief sleep to yield control
+                        await asyncio.sleep(0.1)
+                        
+                finally:
                     await browser.close()
-                
-                # Force Garbage Collection after closing browser
-                gc.collect()
-                # Brief cool-down to let system settle
-                await asyncio.sleep(1)
+                    
         else:
             # Excel Only - No Browser Overhead
-            update_job_progress(job_id, log_msg=f"[SYSTEM] Starting Excel-only generation (Fast Mode)...")
+            update_job_progress(job_id, log_msg=f"[SYSTEM] Starting Excel-only generation...")
             for i, (name, data) in enumerate(filtered_data.items()):
-                # No semaphore needed really for CPU bound simple task, but let's just loop
                 res = await process_user_content(name, data, None)
                 results.append(res)
                 current_prog += 1
-                # Batch updates to db every 5 items to reduce I/O lock contention? 
-                # For now simple update every item is safer for user feedback
                 update_job_progress(job_id, progress=current_prog)
                 if i % 10 == 0: await asyncio.sleep(0.01)
 
