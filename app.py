@@ -133,7 +133,7 @@ def preprocess_df(df: pd.DataFrame) -> pd.DataFrame:
     
     # Date processing
     df['DateObj'] = df['Date'].apply(parse_italian_date)
-    df = df.dropna(subset=['DateObj']) # Drop invalid dates
+    df = df.dropna(subset=['DateObj']).copy() # Drop invalid dates and create fresh copy
     # Convert date objects to timestamp for Parquet compatibility
     df['DateObj'] = pd.to_datetime(df['DateObj'])
     
@@ -539,7 +539,9 @@ async def process_generation_task(job_id: str, filtered_data: dict, generate_pdf
                 return results_dict
                 
             except Exception as e:
-                update_job_progress(job_id, log_msg=f"[ERROR] Failed {user_name}: {str(e)}")
+                err_msg = f"[ERROR] Failed {user_name}: {str(e)}"
+                print(err_msg) # Force print to stdout for Render logs
+                update_job_progress(job_id, log_msg=err_msg)
                 return None
 
         results = []
@@ -607,6 +609,7 @@ async def process_generation_task(job_id: str, filtered_data: dict, generate_pdf
 
         update_job_progress(job_id, log_msg=f"[SYSTEM] Compressing files...")
         
+        files_added_count = 0
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             for res in results:
                 if not res: continue
@@ -621,9 +624,15 @@ async def process_generation_task(job_id: str, filtered_data: dict, generate_pdf
                 
                 if "pdf_bytes" in res:
                     zf.writestr(f"{cc_folder}/PDF/{safe_name}.pdf", res["pdf_bytes"])
+                    files_added_count += 1
                 
                 if "excel_bytes" in res:
                      zf.writestr(f"{cc_folder}/Excel/{safe_name}.xlsx", res["excel_bytes"])
+                     files_added_count += 1
+                     
+            if files_added_count == 0:
+                zf.writestr("ERROR_REPORT.txt", "No files were generated. Please check the Application Logs for details on the error.")
+
         
         zip_buffer.seek(0)
         
