@@ -551,8 +551,8 @@ if __name__ == "__main__":
 
     local_ip = get_local_ip()
     print(f"\\n--- APP PRONTA ---")
-    print(f"Locale:  http://localhost:8108")
-    print(f"Rete:    http://{local_ip}:8108")
+    print(f"Locale:  http://localhost:8107")
+    print(f"Rete:    http://{local_ip}:8107")
     print(f"------------------\\n")
 
-    uvicorn.run(app, host="0.0.0.0", port=8108)
+    uvicorn.run(app, host="0.0.0.0", port=8107)
