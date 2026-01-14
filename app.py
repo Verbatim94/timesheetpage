@@ -181,7 +181,7 @@ def build_users_dict(df: pd.DataFrame) -> Dict[str, Any]:
             month_df = user_df[
                 (user_df['DateObj'].dt.year == year) & 
                 (user_df['DateObj'].dt.month == month)
-            ]
+            ].copy()
             
             # Build matrix
             month_df['Day'] = month_df['DateObj'].dt.day
@@ -319,13 +319,13 @@ async def process_generation_task(job_id: str, filtered_data: dict):
     
     try:
         zip_buffer = io.BytesIO()
-        # Increased concurrency to 10 for speed boost
-        sem = asyncio.Semaphore(10)
+        # Reduced concurrency to 2 to avoid Memory Exhaustion on Render Free Tier
+        sem = asyncio.Semaphore(2)
         
         jobs[job_id]["logs"].append(f"[SYSTEM] Initializing browser engine...")
         
         async with async_playwright() as p:
-            browser = await p.chromium.launch()
+            browser = await p.chromium.launch(args=["--disable-dev-shm-usage", "--no-sandbox"])
             
             async def generate_single_pdf(user_name, user_data):
                 async with sem:
