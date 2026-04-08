@@ -123,7 +123,11 @@
                 return;
             }
 
-            // Validation removed for output format
+            const checkedFormats = document.querySelectorAll('input[name="output_pdf"]:checked, input[name="output_excel"]:checked');
+            if (checkedFormats.length === 0) {
+                alert("Seleziona almeno un formato di output");
+                return;
+            }
 
 
             // Show Overlay
@@ -257,8 +261,24 @@
                     <!-- Date Range Removed as per user request -->
                     <div style="display: none;"></div>
 
-                    <!-- Output Format Removed -->
-                    <input type="hidden" name="output_pdf" value="on">
+                    <div>
+                        <h3 style="margin: 0 0 0.75rem; font-size: 1rem; font-weight: 600; color: var(--text-primary);">
+                            Formati di output
+                        </h3>
+                        <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+                            <div class="checkbox-wrapper">
+                                <input type="checkbox" name="output_pdf" value="on" id="output_pdf" checked>
+                                <label for="output_pdf">PDF</label>
+                            </div>
+                            <div class="checkbox-wrapper">
+                                <input type="checkbox" name="output_excel" value="on" id="output_excel" checked>
+                                <label for="output_excel">Excel</label>
+                            </div>
+                        </div>
+                        <p style="margin: 0.75rem 0 0; color: var(--text-secondary); font-size: 0.85rem;">
+                            Verranno creati uno o due file per ogni utente selezionato.
+                        </p>
+                    </div>
 
                 </div>
 

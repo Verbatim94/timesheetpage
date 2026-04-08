@@ -9,9 +9,7 @@ import re
 import uuid
 from typing import List, Dict, Any, Optional
 
-from fastapi import FastAPI, UploadFile, File, Request, Form, BackgroundTasks, Depends, HTTPException, status
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
-import secrets
+from fastapi import FastAPI, UploadFile, File, Request, Form, BackgroundTasks
 import glob
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
@@ -19,6 +17,9 @@ import pandas as pd
 import calendar
 import uvicorn
 from playwright.async_api import async_playwright
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 
 from fastapi.staticfiles import StaticFiles
@@ -38,22 +39,8 @@ templates = Jinja2Templates(directory=TEMPLATES_DIR)
 # Global Job Store
 # Global Job Store
 jobs: Dict[str, Any] = {}
-
-# --- SECURITY CONFIGURATION ---
-# Change this password!
-APP_PASSWORD = os.environ.get("APP_PASSWORD", "SuperSecurePassword2025!")
-security = HTTPBasic()
-
-def get_current_username(credentials: HTTPBasicCredentials = Depends(security)):
-    correct_password = secrets.compare_digest(credentials.password, APP_PASSWORD)
-    if not correct_password:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect password",
-            headers={"WWW-Authenticate": "Basic"},
-        )
-    return credentials.username
-# ------------------------------
+MAX_LOG_ENTRIES = 500
+PDF_CONCURRENCY = max(1, int(os.environ.get("PDF_CONCURRENCY", "1")))
 
 # Italian month mapping
 MONTH_MAP = {
@@ -152,6 +139,114 @@ def preprocess_df(df: pd.DataFrame) -> pd.DataFrame:
     
     return df
 
+def append_job_log(job_id: str, message: str) -> None:
+    job = jobs.get(job_id)
+    if not job:
+        return
+    logs = job.setdefault("logs", [])
+    logs.append(message)
+    if len(logs) > MAX_LOG_ENTRIES:
+        del logs[:-MAX_LOG_ENTRIES]
+
+def sanitize_path_component(value: Any, fallback: str) -> str:
+    text = str(value or "").strip()
+    text = "".join(c for c in text if c.isalnum() or c in (" ", "_", "-")).strip()
+    return text or fallback
+
+def build_excel_bytes(user_name: str, user_data: Dict[str, Any]) -> bytes:
+    workbook = Workbook()
+    first_sheet = True
+
+    header_fill = PatternFill(fill_type="solid", fgColor="1E293B")
+    shaded_fill = PatternFill(fill_type="solid", fgColor="F8FAFC")
+    total_fill = PatternFill(fill_type="solid", fgColor="E2E8F0")
+    white_bold_font = Font(color="FFFFFF", bold=True)
+    bold_font = Font(bold=True)
+
+    for index, month_data in enumerate(user_data.get("blocks", []), start=1):
+        if first_sheet:
+            ws = workbook.active
+            ws.title = (month_data["month_name"] or f"Sheet{index}")[:31]
+            first_sheet = False
+        else:
+            ws = workbook.create_sheet(title=(month_data["month_name"] or f"Sheet{index}")[:31])
+
+        ws["A1"] = "User"
+        ws["B1"] = user_name
+        ws["D1"] = "Payroll Number"
+        ws["E1"] = user_data.get("payroll", "")
+        ws["G1"] = "Cost Center"
+        ws["H1"] = user_data.get("cost_center", "")
+
+        for cell in ("A1", "D1", "G1"):
+            ws[cell].font = bold_font
+
+        header_row = 3
+        ws.cell(row=header_row, column=1, value=month_data["month_name"] or f"Month {index}")
+        ws.cell(row=header_row, column=1).fill = header_fill
+        ws.cell(row=header_row, column=1).font = white_bold_font
+        ws.cell(row=header_row, column=1).alignment = Alignment(horizontal="left")
+
+        for day in range(1, 32):
+            cell = ws.cell(row=header_row, column=day + 1, value=day if day <= month_data["days_in_month"] else "")
+            cell.fill = header_fill
+            cell.font = white_bold_font
+            cell.alignment = Alignment(horizontal="center")
+
+        total_header = ws.cell(row=header_row, column=33, value="Tot")
+        total_header.fill = header_fill
+        total_header.font = white_bold_font
+        total_header.alignment = Alignment(horizontal="center")
+
+        row_idx = header_row + 1
+        ws.cell(row=row_idx, column=1, value="Totale")
+        ws.cell(row=row_idx, column=1).font = bold_font
+        ws.cell(row=row_idx, column=1).fill = total_fill
+
+        for day_idx, cell_val in enumerate(month_data["total_row_cells"], start=2):
+            cell = ws.cell(row=row_idx, column=day_idx, value=cell_val)
+            cell.alignment = Alignment(horizontal="center")
+            if month_data["total_row_day_shaded_status"][day_idx - 2]:
+                cell.fill = shaded_fill
+            else:
+                cell.fill = total_fill
+
+        ws.cell(row=row_idx, column=33, value=month_data["grand_total"])
+        ws.cell(row=row_idx, column=33).font = bold_font
+        ws.cell(row=row_idx, column=33).fill = total_fill
+        ws.cell(row=row_idx, column=33).alignment = Alignment(horizontal="right")
+
+        for row in month_data["plans"]:
+            row_idx += 1
+            ws.cell(row=row_idx, column=1, value=row["plan_name"])
+            ws.cell(row=row_idx, column=1).alignment = Alignment(horizontal="left")
+
+            for day_offset, day_val in enumerate(row["days"], start=2):
+                value = "" if not day_val["date_valid"] else day_val["value"]
+                cell = ws.cell(row=row_idx, column=day_offset, value=value)
+                cell.alignment = Alignment(horizontal="center")
+                if day_val["shaded"]:
+                    cell.fill = shaded_fill
+
+            ws.cell(row=row_idx, column=33, value=row["total"])
+            ws.cell(row=row_idx, column=33).alignment = Alignment(horizontal="right")
+
+        ws.freeze_panes = "B4"
+        ws.column_dimensions["A"].width = 36
+        for col_idx in range(2, 33):
+            ws.column_dimensions[get_column_letter(col_idx)].width = 5
+        ws.column_dimensions["AG"].width = 10
+
+    if first_sheet:
+        ws = workbook.active
+        ws.title = "Timesheet"
+        ws["A1"] = "Nessun dato disponibile"
+
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    buffer.seek(0)
+    return buffer.getvalue()
+
 def build_users_dict(df: pd.DataFrame) -> Dict[str, Any]:
     """Organizes the CLEAN dataframe into the report structure."""
     users_data = {}
@@ -167,6 +262,8 @@ def build_users_dict(df: pd.DataFrame) -> Dict[str, Any]:
             payroll = str(payroll)
 
         cost_center = user_df["Cost Center"].iloc[0] if not user_df["Cost Center"].empty else ""
+        if pd.isna(cost_center):
+            cost_center = "Unknown"
         
         # Sort by date
         user_df = user_df.sort_values('DateObj')
@@ -276,7 +373,8 @@ def build_users_dict(df: pd.DataFrame) -> Dict[str, Any]:
                     meta = day_meta[d]
                     row_cells.append({
                         "value": fmt(val, is_zero_target_empty=True),
-                        "shaded": meta["shaded"]
+                        "shaded": meta["shaded"],
+                        "date_valid": meta["date_valid"]
                     })
                 
                 plans_list.append({
@@ -305,43 +403,47 @@ def build_users_dict(df: pd.DataFrame) -> Dict[str, Any]:
     return users_data
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request, username: str = Depends(get_current_username)):
+async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 @app.get("/robots.txt", response_class=PlainTextResponse)
 async def robots():
     return "User-agent: *\\nDisallow: /"
 
-async def process_generation_task(job_id: str, filtered_data: dict):
+async def process_generation_task(job_id: str, filtered_data: dict, output_pdf: bool, output_excel: bool):
     jobs[job_id]["status"] = "processing"
     jobs[job_id]["progress"] = 0
     jobs[job_id]["total"] = len(filtered_data)
     
+    zip_path = os.path.join(BASE_DIR, f"output_{job_id}.zip")
+
     try:
-        zip_buffer = io.BytesIO()
-        # Reduced concurrency to 2 to avoid Memory Exhaustion on Render Free Tier
-        sem = asyncio.Semaphore(2)
+        sem = asyncio.Semaphore(PDF_CONCURRENCY)
+        completed_pdfs = 0
         
-        jobs[job_id]["logs"].append(f"[SYSTEM] Initializing browser engine...")
+        append_job_log(job_id, f"[SYSTEM] Initializing browser engine...")
         
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(args=["--disable-dev-shm-usage", "--no-sandbox"])
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(args=["--disable-dev-shm-usage", "--no-sandbox"])
             
-            async def generate_single_pdf(user_name, user_data):
-                async with sem:
-                    try:
-                        jobs[job_id]["logs"].append(f"[TASK] Generating PDF for {user_name}...")
-                        
-                        # Render HTML
-                        html_content = templates.get_template("timesheet_report.html").render(
-                            user_name=user_name,
-                            payroll_number=user_data["payroll"],
-                            cost_center=user_data["cost_center"],
-                            blocks=user_data["blocks"],
-                            is_shaded_col=lambda d: False 
-                        )
-                        
-                        footer_html = """
+                async def generate_single_user_files(user_name, user_data):
+                    page = None
+                    async with sem:
+                        try:
+                            append_job_log(job_id, f"[TASK] Generating files for {user_name}...")
+                            archive_entries = []
+
+                            if output_pdf:
+                                html_content = templates.get_template("timesheet_report.html").render(
+                                    user_name=user_name,
+                                    payroll_number=user_data["payroll"],
+                                    cost_center=user_data["cost_center"],
+                                    blocks=user_data["blocks"],
+                                    is_shaded_col=lambda d: False
+                                )
+
+                                footer_html = """
         <div style="font-size: 8px; font-family: sans-serif; width: 100%; display: flex; justify-content: space-between; padding: 0 20px; color: #555;">
             <span>Year: <span class="date"></span></span>
             <span>Page <span class="pageNumber"></span> / <span class="totalPages"></span></span>
@@ -349,81 +451,92 @@ async def process_generation_task(job_id: str, filtered_data: dict):
         </div>
         """
 
-                        page = await browser.new_page()
-                        await page.set_content(html_content)
-                        
-                        pdf_bytes = await page.pdf(
-                            format="A4",
-                            print_background=True,
-                            landscape=False,
-                            display_header_footer=True,
-                            header_template="<div></div>", # Empty header
-                            footer_template=footer_html,
-                            margin={"top": "1cm", "right": "0.5cm", "bottom": "1.5cm", "left": "0.5cm"}
-                        )
-                        await page.close()
-                        
-                        # Update progress
-                        jobs[job_id]["progress"] += 1
-                        jobs[job_id]["logs"].append(f"[SUCCESS] {user_name} completed.")
-                        
-                        return user_name, user_data.get("cost_center"), pdf_bytes
-                    except Exception as e:
-                        jobs[job_id]["logs"].append(f"[ERROR] Failed {user_name}: {str(e)}")
-                        return None
+                                page = await browser.new_page()
+                                await page.set_content(html_content, wait_until="load")
 
-            tasks = [generate_single_pdf(name, data) for name, data in filtered_data.items()]
-            results = await asyncio.gather(*tasks)
+                                pdf_bytes = await page.pdf(
+                                    format="A4",
+                                    print_background=True,
+                                    landscape=False,
+                                    display_header_footer=True,
+                                    header_template="<div></div>",
+                                    footer_template=footer_html,
+                                    margin={"top": "1cm", "right": "0.5cm", "bottom": "1.5cm", "left": "0.5cm"}
+                                )
+                                archive_entries.append(("pdf", pdf_bytes))
+                                await page.close()
+                                page = None
+
+                            if output_excel:
+                                excel_bytes = build_excel_bytes(user_name, user_data)
+                                archive_entries.append(("xlsx", excel_bytes))
+
+                            cc_folder = sanitize_path_component(user_data.get("cost_center"), "Unknown")
+                            safe_name = sanitize_path_component(user_name, "utente")
+                            base_archive_name = f"{cc_folder}/{safe_name}"
+
+                            append_job_log(job_id, f"[SUCCESS] {user_name} completed.")
+                            return [(f"{base_archive_name}.{ext}", file_bytes) for ext, file_bytes in archive_entries]
+                        except Exception as e:
+                            append_job_log(job_id, f"[ERROR] Failed {user_name}: {str(e)}")
+                            return None
+                        finally:
+                            if page is not None:
+                                await page.close()
+
+                tasks = [
+                    asyncio.create_task(generate_single_user_files(name, data))
+                    for name, data in filtered_data.items()
+                ]
             
-            jobs[job_id]["logs"].append(f"[SYSTEM] Compressing files...")
+                for task in asyncio.as_completed(tasks):
+                    res = await task
+                    if not res:
+                        continue
+                    for archive_name, file_bytes in res:
+                        zf.writestr(archive_name, file_bytes)
+                        del file_bytes
+                    completed_pdfs += 1
+                    jobs[job_id]["progress"] = completed_pdfs
             
-            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-                for res in results:
-                    if not res: continue
-                    user_name, cc, pdf_bytes = res
-                    
-                    # Add to zip with folder structure: Cost Center / User.pdf
-                    cc_folder = str(cc).strip()
-                    cc_folder = "".join([c for c in cc_folder if c.isalnum() or c in (' ', '_', '-')]).strip()
-                    if not cc_folder: cc_folder = "NoCostCenter"
-                    
-                    safe_name = "".join([c for c in user_name if c.isalnum() or c in (' ', '_', '-')]).strip()
-                    
-                    zf.writestr(f"{cc_folder}/{safe_name}.pdf", pdf_bytes)
-            
-            await browser.close()
-            
-        zip_buffer.seek(0)
-        
-        # Save to temp file
-        temp_filename = f"output_{job_id}.zip"
-        with open(temp_filename, "wb") as f:
-            f.write(zip_buffer.getvalue())
-            
-        jobs[job_id]["filename"] = temp_filename
+        if completed_pdfs == 0:
+            raise RuntimeError("Nessun file generato correttamente.")
+
+        jobs[job_id]["filename"] = zip_path
         jobs[job_id]["status"] = "completed"
-        jobs[job_id]["logs"].append(f"[SYSTEM] Job Dispatched. Ready for download.")
+        append_job_log(job_id, f"[SYSTEM] Job Dispatched. Ready for download.")
         
     except Exception as e:
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["error"] = str(e)
-        jobs[job_id]["logs"].append(f"[CRITICAL] Job Failed: {str(e)}")
+        append_job_log(job_id, f"[CRITICAL] Job Failed: {str(e)}")
+        try:
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
+        except OSError:
+            pass
 
 @app.post("/generate")
-async def generate_pdf(background_tasks: BackgroundTasks, request: Request, cost_centers: List[str] = Form(...), file_id: str = Form(...), username: str = Depends(get_current_username)):
+async def generate_pdf(
+    background_tasks: BackgroundTasks,
+    request: Request,
+    cost_centers: List[str] = Form(...),
+    file_id: str = Form(...),
+    output_pdf: Optional[str] = Form(None),
+    output_excel: Optional[str] = Form(None)
+):
     temp_file = f"temp_{file_id}.parquet"
     if not os.path.exists(temp_file):
         return JSONResponse({"error": "Sessione scaduta o file non trovato"}, status_code=400)
         
     try:
-        # Load from Parquet
-        df = pd.read_parquet(temp_file)
-        
-        # PRIVACY ERASE: Delete immediately after reading
         try:
-            os.remove(temp_file)
-        except:
-            pass
+            df = pd.read_parquet(temp_file)
+        finally:
+            try:
+                os.remove(temp_file)
+            except OSError:
+                pass
         
         try:
             data = build_users_dict(df)
@@ -440,6 +553,11 @@ async def generate_pdf(background_tasks: BackgroundTasks, request: Request, cost
         if not filtered_data:
              return JSONResponse({"error": "Nessun utente trovato"}, status_code=400)
 
+        wants_pdf = output_pdf is not None
+        wants_excel = output_excel is not None
+        if not wants_pdf and not wants_excel:
+            return JSONResponse({"error": "Seleziona almeno un formato di output"}, status_code=400)
+
         # Create Job
         job_id = str(uuid.uuid4())
         jobs[job_id] = {
@@ -451,7 +569,7 @@ async def generate_pdf(background_tasks: BackgroundTasks, request: Request, cost
         }
         
         # Start Background Task
-        background_tasks.add_task(process_generation_task, job_id, filtered_data)
+        background_tasks.add_task(process_generation_task, job_id, filtered_data, wants_pdf, wants_excel)
         
         return JSONResponse({"job_id": job_id})
     
@@ -459,17 +577,19 @@ async def generate_pdf(background_tasks: BackgroundTasks, request: Request, cost
         return JSONResponse({"error": str(e)}, status_code=500)
 
 @app.get("/job/{job_id}")
-async def get_job_status(job_id: str, username: str = Depends(get_current_username)):
+async def get_job_status(job_id: str):
     if job_id not in jobs:
         return JSONResponse({"error": "Job not found"}, status_code=404)
     return JSONResponse(jobs[job_id])
 
 @app.get("/download/{job_id}")
-async def download_job(job_id: str, background_tasks: BackgroundTasks, username: str = Depends(get_current_username)):
+async def download_job(job_id: str, background_tasks: BackgroundTasks):
     if job_id not in jobs or jobs[job_id]["status"] != "completed":
          return JSONResponse({"error": "File not ready"}, status_code=404)
          
     path = jobs[job_id]["filename"]
+    if not path or not os.path.exists(path):
+        return JSONResponse({"error": "File not found"}, status_code=404)
     
     def cleanup():
         try:
@@ -490,7 +610,7 @@ async def download_job(job_id: str, background_tasks: BackgroundTasks, username:
     )
 
 @app.post("/analyze", response_class=HTMLResponse)
-async def analyze_excel(request: Request, file: UploadFile = File(...), username: str = Depends(get_current_username)):
+async def analyze_excel(request: Request, file: UploadFile = File(...)):
     content = await file.read()
     
     try:
